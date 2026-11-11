@@ -6,3 +6,6 @@ rt64 src/hle/rt64_workload.cpp
 rt64 src/hle/rt64_workload.h
 rt64 src/render/rt64_projection_processor.cpp
 rt64 src/render/rt64_shader_library.cpp
+N64ModernRuntime ultramodern/src/audio.cpp
+N64ModernRuntime ultramodern/src/mesgqueue.cpp
+N64ModernRuntime ultramodern/src/threadqueue.cpp

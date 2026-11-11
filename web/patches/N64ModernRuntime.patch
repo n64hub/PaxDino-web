@@ -1,0 +1,170 @@
+--- a/ultramodern/src/audio.cpp
++++ b/ultramodern/src/audio.cpp
+@@ -1,6 +1,7 @@
+ #include "ultramodern/ultra64.h"
+ #include "ultramodern/ultramodern.hpp"
+ #include <cassert>
++#include <cstdio>
+ 
+ static uint32_t sample_rate = 48000;
+ // Deterministic mode: the audio the game has queued and not yet played, in
+@@ -30,6 +31,19 @@
+     // Ensure that the byte count is an integer multiple of samples.
+     assert((byte_count & 1) == 0);
+ 
++    // A game may give its buffer's uncached address (KSEG1, from 0xA0000000), which TO_PTR would put 512 MB past
++    // RDRAM: it's read through the cached one (KSEG0) for the same memory. A buffer that doesn't lie in RDRAM's 8 MB
++    // isn't played, as reading it would read past RDRAM (into another allocation on a page, which has no guard region).
++    const uint32_t rdram_address = uint32_t(audio_data_) & 0x1FFFFFFF;
++    if ((uint32_t(audio_data_) & 0xC0000000) != 0x80000000 || rdram_address > 0x800000 || byte_count > 0x800000 - rdram_address) {
++        static bool reported = false;
++        if (!reported) {
++            reported = true;
++            fprintf(stderr, "ultramodern: a sound buffer outside RDRAM (0x%08X, %u bytes) isn't played\n", uint32_t(audio_data_), byte_count);
++        }
++        return;
++    }
++    audio_data_ = PTR(int16_t)(rdram_address | 0x80000000);
+     if (ultramodern::is_deterministic()) {
+         deterministic_audio_bytes += byte_count;
+     }
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -14,6 +14,14 @@
+     bool jam;
+     bool requeue_if_blocked;
+     int src; // an EventMessageSource, or -1
++#if ULTRAMODERN_HOLD_BLOCKED_MESSAGES
++    // A blocked external message waits in a list, not in the queue (below wait_for_external_message_timed).
++    static std::vector<QueuedMessage> blocked_messages;
++    static bool send_blocked_messages(RDRAM_ARG1);
++#define REQUEUE_BLOCKED_MESSAGE(mesg) QueuedMessage::blocked_messages.push_back(mesg)
++#else
++#define REQUEUE_BLOCKED_MESSAGE(mesg) external_messages.enqueue(mesg)
++#endif
+ };
+ 
+ static moodycamel::BlockingConcurrentQueue<QueuedMessage> external_messages {};
+@@ -94,13 +102,16 @@
+     }
+     QueuedMessage to_send;
+     std::vector<QueuedMessage> requeued_messages{};
++#if ULTRAMODERN_HOLD_BLOCKED_MESSAGES
++    QueuedMessage::send_blocked_messages(PASS_RDRAM1);
++#endif
+     while (external_messages.try_dequeue(to_send)) {
+         if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+             requeued_messages.push_back(to_send);
+         }
+     }
+     for (QueuedMessage& cur_mesg : requeued_messages) {
+-        external_messages.enqueue(cur_mesg);
++        REQUEUE_BLOCKED_MESSAGE(cur_mesg);
+     }
+ }
+ 
+@@ -110,9 +121,14 @@
+         return;
+     }
+     QueuedMessage to_send;
++#if ULTRAMODERN_HOLD_BLOCKED_MESSAGES
++    if (QueuedMessage::send_blocked_messages(PASS_RDRAM1)) {
++        return;
++    }
++#endif
+     external_messages.wait_dequeue(to_send);
+     if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-        external_messages.enqueue(to_send);
++        REQUEUE_BLOCKED_MESSAGE(to_send);
+     }
+ }
+ 
+@@ -122,12 +138,43 @@
+         return;
+     }
+     QueuedMessage to_send;
++#if ULTRAMODERN_HOLD_BLOCKED_MESSAGES
++    if (QueuedMessage::send_blocked_messages(PASS_RDRAM1)) {
++        return;
++    }
++#endif
+     if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {
+         if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-            external_messages.enqueue(to_send);
++            REQUEUE_BLOCKED_MESSAGE(to_send);
++        }
++    }
++}
++
++#if ULTRAMODERN_HOLD_BLOCKED_MESSAGES
++// An external message whose queue is full and that is to be sent again waits here, and is tried again before any other
++// at a game thread's next OS call or the idle thread's next wait. Put back into external_messages, the idle thread
++// (pause_self) took it again at once, since that queue keeps no order between producers: it spun on it, ~12 million
++// times a second, and the messages behind it waited until a game thread's OS call drained the queue, often the
++// scheduler's at the next retrace. Jet Force Gemini leaves a controller (SI) message blocked for good, so with the RSP's
++// completion of a display list sent before the RDP's, each frame's RDP completion waited for a retrace: 4-6 retraces a
++// game frame instead of 2. A slot frees only by a game thread's receive, which an OS call or an idle wait follows, so a
++// message held here is never stranded. Only the game thread that runs touches the list.
++std::vector<QueuedMessage> QueuedMessage::blocked_messages{};
++
++bool QueuedMessage::send_blocked_messages(RDRAM_ARG1) {
++    bool sent_any = false;
++    for (size_t i = 0; i < blocked_messages.size();) {
++        const QueuedMessage& cur_mesg = blocked_messages[i];
++        if (do_send(PASS_RDRAM cur_mesg.mq, cur_mesg.mesg, cur_mesg.jam, false)) {
++            blocked_messages.erase(blocked_messages.begin() + i);
++            sent_any = true;
++        } else {
++            i++;
+         }
+     }
++    return sent_any;
+ }
++#endif
+ 
+ extern "C" void osCreateMesgQueue(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg, s32 count) {
+     OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
+--- a/ultramodern/src/threadqueue.cpp
++++ b/ultramodern/src/threadqueue.cpp
+@@ -1,4 +1,5 @@
+ #include <cassert>
++#include <cstdio>
+ 
+ #include "ultramodern/ultramodern.hpp"
+ 
+@@ -14,6 +15,19 @@
+ void ultramodern::thread_queue_insert(RDRAM_ARG PTR(PTR(OSThread)) queue_, PTR(OSThread) toadd_) {
+     PTR(OSThread)* cur = queue_to_ptr(PASS_RDRAM queue_);
+     OSThread* toadd = TO_PTR(OSThread, toadd_); 
++    // A thread already in the queue isn't put in again: that links it to itself, and every later walk of the queue
++    // goes round for good, which hangs the game. osStartThread on a thread that isn't stopped does it without
++    // ULTRAMODERN_LIBULTRA_THREAD_STOP; anything else that does is said once, so it can be found.
++    for (PTR(OSThread) queued = *cur; queued != NULLPTR; queued = TO_PTR(OSThread, queued)->next) {
++        if (queued == toadd_) {
++            static bool reported = false;
++            if (!reported) {
++                reported = true;
++                fprintf(stderr, "ultramodern: thread %d was put in a queue it was in already\n", toadd->id);
++            }
++            return;
++        }
++    }
+     debug_printf("[Thread Queue] Inserting thread %d into queue 0x%08X\n", toadd->id, (uintptr_t)queue_);
+     while (*cur && TO_PTR(OSThread, *cur)->priority > toadd->priority) {
+         cur = &TO_PTR(OSThread, *cur)->next;
+@@ -41,11 +55,13 @@
+ }
+ 
+ bool ultramodern::thread_queue_remove(RDRAM_ARG PTR(PTR(OSThread)) queue_, PTR(OSThread) t_) {
+-    debug_printf("[Thread Queue] Removing thread %d from queue 0x%08X\n", TO_PTR(OSThread, t_)->id, (uintptr_t)queue_);
+-
++    // osDestroyThread passes a thread that isn't stopped but is on no queue (one that ran and returned) with a null
++    // queue: there is nothing to take it off, as upstream's loop never started for one.
+     if (queue_ == NULLPTR) {
+         return false;
+     }
++    debug_printf("[Thread Queue] Removing thread %d from queue 0x%08X\n", TO_PTR(OSThread, t_)->id, (uintptr_t)queue_);
++
+     // Walk the list; the thread can be anywhere in it, not just at the head.
+     PTR(OSThread)* cur = queue_to_ptr(PASS_RDRAM queue_);
+     while (*cur != NULLPTR) {
