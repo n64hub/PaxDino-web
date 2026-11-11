@@ -187,7 +187,15 @@ change is merged by hand in `web/patches/` (`web/patches/files.txt` names them a
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, or with the
 `coi_serviceworker.js` beside the page, and open `PaxDino.html` in a browser with WebGPU.
 
-What differs on the page, all behind `__EMSCRIPTEN__`: no Netplay (UDP to another PC's address) and no Add to Steam on
-the launcher, the sound through N64Recomp-browser's `audio_output.h` (the game's rate converted to the page's by an
+What differs on the page, all behind `__EMSCRIPTEN__`: no Netplay (UDP to another PC's address), Add to Steam or Exit
+on the launcher, the sound through N64Recomp-browser's `audio_output.h` (the game's rate converted to the page's by an
 SDL stream), no native file dialog, and either preset at resolution Auto and the display's frame rate, with no
-downsampling or MSAA.
+downsampling or MSAA. On a page RDRAM is a 512 MB allocation in the wasm heap rather than a 4 GB reservation, so the
+TLB views and VM regions (`src/game/tlb_views.cpp`), which the generated code reaches about 2 GB past RDRAM, are backed
+by moving the heap's break past them, and the page's memory grows up to 4 GB. The bloom pass's output is marked
+`rgba16f` for WebGPU (`web/patches/rt64.patch`).
+
+RT64 builds its pipelines from `web/rt64_shaders.txt` (`RT64_PREBUILT_SHADER_LIST`), in sections: the boot's before the
+game starts, and a map's the first time it draws. Its header says how it was recorded: N64Recomp-browser's
+`tools/record_shaders.mjs` with `tools/shader_plan.json`. `tools/play_plan.json` is the page's regular play for
+N64Recomp-browser's `tools/play_page.mjs`, and `tools/game_state.js` tells both plans where the game is.

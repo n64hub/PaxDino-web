@@ -1,0 +1,139 @@
+# The RT64 shaders the web page builds: one shader description a line, other mode L and H, color combiner L and H,
+# flags, in hex. RT64 specializes each one's WGSL when the page is built and builds them with the game waiting: those
+# above the first "section" line before the game starts, and a section when a frame first wants 4 of its shaders, so
+# that nothing draws with the ubershader, which integrated graphics can't afford (N64Recomp-browser's README, "Give
+# RT64 a list of the game's shaders").
+#
+# Recorded by playing, a page load a section: N64Recomp-browser's tools/record_shaders.mjs with
+# tools/shader_plan.json, which drives the menus with PaxDino's keys (Enter selects, the arrow keys move, W is C-Up)
+# and knows where the game is by the game's mode and the front end's screen (tools/game_state.js), in the Modern
+# preset. Section 0 is the launcher, the boot screens, the title and the menus to level select: Multiplayer, one
+# player, the first character, the default loadout. Then a Bloodlust match, one bot, on each of the nine maps a new
+# save offers, reached by Down at level select, its options and Rumble Pak screens on the way, and played 45 s of the
+# match's clock as tools/play_plan.json plays (walking out and back, turning, firing), with the pause list once: Grim
+# Retreat, Fallout, Bomb Shelter, Fire Temple, The Pit, Leap of Faith, Crypts, Hopeless and Proving Grounds. Not
+# recorded: the maps a save unlocks later, the team, Frag Tag and flag modes' maps, 1 Player Trials, split screen and
+# a match's end. Flags follow settings (filtering, the screen filters, bloom), so a change to one of those defaults
+# means recording again.
+00504240 00002c1f fcffffff fffe793c 0800000e
+00504240 0000ac1f fc12b225 ff67dbed 04cb540b
+00504340 00000c1f fcffffff fffdf6fb 0800000b
+00504240 00000c1f fcffffff fffdf6fb 0800000b
+0c184240 00100cff fc12abff fffffe38 04cf540b
+00504240 00000cff fcffffff fffdf6fb 0800000b
+00504340 00000cff fcffffff fffdf6fb 0800000b
+0c192478 00182c1f fc327fff fffff638 0800000e
+00504240 00102c1f fc511bff 3ffdfe38 084e142b
+00504240 00002c1f fcffffff fffdf6fb 0800000b
+00504340 00002c1f fcffffff fffdf6fb 0800000b
+0c192478 0018ac1f fc1217ff fffffe38 088a000e
+00504240 00008c1f fc12fe25 fffff7fb 04cb540b
+00504240 00008c1f fcffffff fffdf6fb 0800000b
+00504240 0000ac1f fc12fe25 fffff7fb 04cb540b
+00504240 0000ac1f fcffffff fffdf6fb 0800000b
+00504240 00008c1f fc12b225 ff67dbed 04cb540b
+00504240 0000ac1f fcffffff fffe793c 0800000e
+00504240 0000ac1f fc12b225 ff67dbed 0ccb540b
+00504240 0000ac1f fc12fe25 fffff7fb 0ccb540b
+0c192478 0018ac1f fc1217ff fffffe38 0aaaaa0a
+0c192478 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c1841f8 0018ac1f fcff97ff ff14fe3f 088a000e
+c8112478 0018ac1f fc1217ff fffffe38 088a000e
+c8104b50 00182c1f fcff97ff fffffe38 0ccb540a
+c81041f8 0018ac1f fcff97ff ff14fe3f 088a000e
+section grim-retreat
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000a
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section fallout
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+0c192438 0018ac1f fcff97ff fffcfe38 088a000e
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section bomb-shelter
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section fire-temple
+0c1849d8 0018ac1f fc1217ff fffffe38 088a000e
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c184a50 0018ac1f fc1217ff fffffe38 088a000e
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c184a50 0018ac1f fcff97ff fffcfe38 088a000e
+00504b50 0008ec1f fc30c261 5586ff7f 088a000a
+0c192438 0018ac1f fcff97ff fffcfe38 088a000e
+00504340 0008ac1f fcffffff fffdf6fb 0800000b
+00504340 00082c1f fcffffff fffdf6fb 0800000b
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section the-pit
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c192438 0018ac1f fcff97ff fffcfe38 088a000e
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+00504b50 0008acaf fcff97ff ff2cfe7f 0aaaaa0a
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section leap-of-faith
+c8112478 0018ac1f fc1217ff fffffe38 0aaaaa0e
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+c8112438 0018ac1f fc1217ff fffffe38 088a000e
+c8112438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+c8104a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section crypts
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c193078 0018ac1f fc1217ff fffffe38 088a000e
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c192438 0018ac1f fcff97ff fffcfe38 088a000e
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
+section hopeless
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c192438 0018ac1f fcff97ff fffcfe38 088a000e
+00504b50 0008ec1f fc30c261 5586ff7f 088a000a
+section proving-grounds
+00504240 00102c1f fc12b225 ff67dbed 084e142b
+0c192438 0018ac1f fc1217ff fffffe38 088a000e
+0c192438 0018ac1f fc1217ff fffffe38 0aaaaa0e
+0c184240 00102c1f fc12abff fffffe38 04cf540b
+00504240 00102c1f fc511bff 3ffdfe38 004e142b
+0c184240 00102c1f fc12abff fffffe38 0ccf540b
+00504b50 0008ecaf fc309661 552eff7f 0aaaaa0a
+0c184a50 0018ec1f fc3097ff 5ffefe38 088a000e
