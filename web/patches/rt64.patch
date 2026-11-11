@@ -851,3 +851,20 @@
              rspVertexTestZMS.pipeline = device->createComputePipeline(RenderComputePipelineDesc(rspVertexTestZMS.pipelineLayout.get(), computeShaderMS.get(), 1, 1, 1));
          }
  
+--- a/src/shaders/BloomCS.hlsl
++++ b/src/shaders/BloomCS.hlsl
+@@ -3,12 +3,13 @@
+ //
+ 
+ #include "shared/rt64_bloom.h"
++#include "WebGPU.hlsli"
+ 
+ #define BLOCK_SIZE 8
+ 
+ [[vk::push_constant]] ConstantBuffer<BloomCB> gConstants : register(b0);
+ Texture2D<float4> gInput : register(t1);
+-RWTexture2D<float4> gOutput : register(u2);
++IMAGE_FORMAT("rgba16f") RWTexture2D<float4> gOutput : register(u2);
+ 
+ // Bloom (render/rt64_screen_filter.h): a glow around the brightest strongly
+ // coloured parts of the picture (lava, neon, energy shots, fire). The N64's

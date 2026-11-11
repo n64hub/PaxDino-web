@@ -11,7 +11,9 @@
 # flags (state.h, workload.h and .cpp) are both: the game's framebufferAspect and the web's pipelineWarmUp. In
 # rt64_projection_processor.cpp the game's exactViewProj goes before the web's interpolated camera eye. In
 # rt64_shader_library.cpp the game's BloomCS (its 0006) is in the web's WGSL list too, and made with the web's
-# CREATE_SHADER_INPUTS, which takes the shader's name.
+# CREATE_SHADER_INPUTS, which takes the shader's name. rt64.patch also gives the game's own BloomCS.hlsl, which the web
+# doesn't touch, its output's format (WebGPU.hlsli's IMAGE_FORMAT, rgba16f): naga makes an unmarked RWTexture2D<float4>
+# rgba32float, and its pipeline didn't match its layout.
 # N64ModernRuntime: in audio.cpp the web's check of a sound buffer's address comes first, then the game's count of the
 # bytes deterministic mode (netplay, its 0004) plays. In mesgqueue.cpp the game's message source for deterministic
 # mode's order and the web's held blocked messages are both kept: deterministic mode returns before the web's paths.
