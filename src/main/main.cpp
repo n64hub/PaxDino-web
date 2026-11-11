@@ -827,8 +827,9 @@ namespace {
         trw::presets::add_launcher_option(options);
 #ifndef __EMSCRIPTEN__
         slim(options->add_option("Add to Steam", on_add_to_steam));
-#endif
+        // A program that ends leaves a page dead.
         slim(options->add_exit_option());
+#endif
     }
 
     // --netplay (Leave Game in a session starts PaxDino again with it): the
