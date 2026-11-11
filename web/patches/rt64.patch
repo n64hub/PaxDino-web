@@ -1,0 +1,853 @@
+--- a/src/common/rt64_math.cpp
++++ b/src/common/rt64_math.cpp
+@@ -291,10 +291,13 @@
+             // Solve the equation by inverting PerspectiveMatrix and multiplying
+             // rightHandSide by the inverse.  (This is the easiest way, not
+             // necessarily the best.)
++            // recomposeMatrix multiplies PerspectiveMatrix by a matrix whose last column is the perspective, so this
++            // column is PerspectiveMatrix times the perspective and the inverse goes in untransposed. glm transposes it
++            // for its column-major indexing: here that brought in the translation, and a far object's rounding error in
++            // this column became a perspective as large as its translation over its scale.
+             hlslpp::float4x4 InversePerspectiveMatrix = inverse(PerspectiveMatrix);
+-            hlslpp::float4x4 TransposedInversePerspectiveMatrix = transpose(InversePerspectiveMatrix);
+ 
+-            perspective = hlslpp::mul(TransposedInversePerspectiveMatrix, RightHandSide);
++            perspective = hlslpp::mul(InversePerspectiveMatrix, RightHandSide);
+ 
+             // Clear the perspective partition
+             LocalMatrix[0][3] = LocalMatrix[1][3] = LocalMatrix[2][3] = 0.0f;
+--- a/src/gbi/rt64_gbi.cpp
++++ b/src/gbi/rt64_gbi.cpp
+@@ -150,6 +150,7 @@
+     const GBIInstance   L3DEX_1_23                = { "L3DEX 1.23",                                GBIUCode::Unknown,     { false,  false,  false,  false,  false } }; // Needs confirmation.
+     const GBIInstance   L3DEX_1_23_A              = { "L3DEX 1.23 (Variant)",                      GBIUCode::Unknown,     { false,  false,  false,  false,  false } }; // Needs confirmation.
+     const GBIInstance   L3DEX2_FIFO_2_05          = { "L3DEX2.fifo 2.05",                          GBIUCode::L3DEX2,      { false,  false,  false,  false,  false } }; // Needs confirmation.
++    const GBIInstance   L3DEX2_FIFO_2_06          = { "L3DEX2.fifo 2.06",                          GBIUCode::L3DEX2,      { false,  false,  false,  false,  false } };
+     const GBIInstance   L3DEX2_FIFO_ACCLAIM       = { "L3DEX2.fifo 2.05 (Acclaim)",                GBIUCode::L3DEX2,      { false,  false,  false,  false,  false } }; // Needs confirmation.
+     const GBIInstance   L3DEX2_FIFO_2_08          = { "L3DEX2.fifo 2.08",                          GBIUCode::L3DEX2,      { false,  false,  false,  false,  false } }; // Needs confirmation.
+     const GBIInstance   ZSORTP_0_33               = { "ZSortp 0.33",                               GBIUCode::Unknown,     { false,  false,  false,  false,  false } }; // Needs confirmation.
+@@ -251,7 +252,7 @@
+             GBISegment{ 0xF68,      0x75A9F04BCF222D6AULL,  { &L3DEX_1_00 } }, // Needs confirmation.
+             GBISegment{ 0xFF0,      0xCFAEE316F8AF900CULL,  { &L3DEX_1_21, &L3DEX_1_23_A } }, // Needs confirmation.
+             GBISegment{ 0xFF0,      0xC8D5E51F62D4F740ULL,  { &L3DEX_1_23 } }, // Needs confirmation.
+-            GBISegment{ 0x1190,     0xA2F9906594260FD4ULL,  { &L3DEX2_FIFO_2_05 } }, // Needs confirmation.
++            GBISegment{ 0x1190,     0xA2F9906594260FD4ULL,  { &L3DEX2_FIFO_2_05, &L3DEX2_FIFO_2_06 } }, // Needs confirmation.
+             GBISegment{ 0x1190,     0x019210E4F59B27C1ULL,  { &L3DEX2_FIFO_ACCLAIM } }, // Needs confirmation.
+             GBISegment{ 0x1190,     0x60B6BA671EE6F1F6ULL,  { &L3DEX2_FIFO_2_08 } }, // Needs confirmation.
+             GBISegment{ 0x10B0,     0xE8028E4BC6529E6EULL,  { &ZSORTP_0_33 } }, // Needs confirmation.
+@@ -365,6 +366,13 @@
+             GBISegment{ 0x400,      0x8F5D64011662220CULL,  { &ZSORTP_0_33 } }, // Needs confirmation.
+     };
+ 
++    // Data segments added apart from dataSegments, so that a game's own rt64 change that adds to that array, and so
++    // changes its count, still applies over this file (CBFD-Recompiled-web's, JetForceGemini-Recomp-web's). They are
++    // hashed after it, from the segment's start again.
++    static std::array<GBISegment, 1> moreDataSegments = {
++            GBISegment{ 0x3F0,      0x56A837AB6D5BB446ULL,  { &L3DEX2_FIFO_2_06 } },
++    };
++
+     static bool textAndDataSegmentsSorted = false;
+ 
+     // GBIManager
+@@ -375,6 +383,7 @@
+         if (!textAndDataSegmentsSorted) {
+             std::sort(textSegments.begin(), textSegments.end());
+             std::sort(dataSegments.begin(), dataSegments.end());
++            std::sort(moreDataSegments.begin(), moreDataSegments.end());
+             textAndDataSegmentsSorted = true;
+         }
+     }
+@@ -435,6 +444,15 @@
+             hashSegment(i, dataSegments[i], dataSegmentIndex);
+         }
+ 
++        // An index past dataSegments' is one of moreDataSegments.
++        XXH3_64bits_reset(&xxh3);
++        rdramCursor = &RDRAM[dataAddress];
++        rdramHashed = 0;
++        rdramHash = 0;
++        for (uint32_t i = 0; i < moreDataSegments.size(); i++) {
++            hashSegment(uint32_t(dataSegments.size()) + i, moreDataSegments[i], dataSegmentIndex);
++        }
++
+         if (textSegmentIndex < 0 || dataSegmentIndex < 0) {
+             fprintf(stderr, "Unable to find a matching GBI in the current database. This game is not supported in HLE.\n");
+             deduceGBIInformation(RDRAM, textAddress, dataAddress);
+@@ -443,7 +461,8 @@
+ 
+         // Search for the first intersection available between both segments.
+         const GBISegment &textSegment = textSegments[textSegmentIndex];
+-        const GBISegment &dataSegment = dataSegments[dataSegmentIndex];
++        const GBISegment &dataSegment = (uint32_t(dataSegmentIndex) < dataSegments.size()) ? dataSegments[dataSegmentIndex] :
++            moreDataSegments[dataSegmentIndex - dataSegments.size()];
+         const GBIInstance *matchingInstance = nullptr;
+         for (const GBIInstance *textInstance : textSegment.instances) {
+             for (const GBIInstance *dataInstance : dataSegment.instances) {
+--- a/src/hle/rt64_state.h
++++ b/src/hle/rt64_state.h
+@@ -4,6 +4,8 @@
+ 
+ #pragma once
+ 
++#include <atomic>
++
+ #include "xxHash/xxh3.h"
+ 
+ #include "common/rt64_emulator_configuration.h"
+@@ -67,6 +69,13 @@
+         };
+ 
+         uint8_t *RDRAM;
++
++        // Optional (the runtime's, or nullptr): [0] counts the display lists the runtime has had read in full, and the
++        // interpreter stores in [1 + offset / 256], for each 256 bytes of RDRAM's first 8 MB it reads a command from, the
++        // number of the list it is reading ([0] + 1), so the runtime can hold a load from ROM that would land on commands
++        // of a list not read yet.
++        std::atomic<uint32_t> *displayListReads = nullptr;
++
+         uint32_t *MI_INTR_REG;
+         void (*checkInterrupts)();
+         Microcode microcode;
+@@ -83,6 +92,9 @@
+         uint64_t workloadCounter;
+         std::vector<uint64_t> evictedTextureHashes;
+         std::unique_ptr<RenderTarget> dummyDepthTarget;
++#   if RT64_WGSL
++        DummyDepthTargets dummyDepthTargets;
++#   endif
+         DrawCall drawCall;
+         DrawStatus drawStatus;
+         SpriteCommand activeSpriteCommand;
+@@ -91,6 +103,34 @@
+         std::vector<uint32_t> drawFbDiscards;
+         std::vector<DisplayList *> returnAddressStack;
+         std::vector<Framebuffer *> differentFbs;
++
++        // Render to RAM copies waiting for the next list or screen update (renderToRAMLate), in the order they were drawn.
++        struct PendingRAMCopy {
++            uint32_t address;
++            uint32_t rowWidth;
++            uint32_t rowStart;
++            uint32_t rowEnd;
++        };
++
++        // For each framebuffer with a pending copy, by its address: the words of RDRAM it covers (from a word-aligned
++        // start) as they were when the list ended, with each copy written in as it lands, and whether the CPU has
++        // written to them since.
++        struct PendingRAMImage {
++            uint32_t start = 0;
++            std::vector<uint32_t> words;
++            bool checked = false;
++            bool cpuWrote = false;
++        };
++
++        std::vector<PendingRAMCopy> pendingRAMCopies;
++        std::unordered_map<uint32_t, PendingRAMImage> pendingRAMImages;
++        uint32_t lateRAMCopyCpuWrites = 0;
++
++        // Set by the RDP's full sync while fullSync() runs if the command after it ends the list at its top level (and
++        // the list then ends there, that command not read again): only then has the RSP read every command of the list
++        // by the time the RDP is done, so the game may be told so before the last batch is recorded
++        // (Application::Core::rdpDone) without the interpreter reading what it writes next.
++        bool listEndsAfterFullSync = false;
+         GameConfiguration gameConfig;
+         uint32_t displayListAddress;
+         uint64_t displayListCounter;
+@@ -100,6 +140,19 @@
+         uint64_t lastScreenHash;
+         uint32_t lastScreenFactorCounter;
+         VIHistory viHistory;
++
++        // The last different framebuffers the VI has shown, for which a workload draws to (advanceWorkload()):
++        // viHistory keeps the last three VIs, and a game with three framebuffers can show its third only now and then.
++        // workloadId is the last workload that drew to it, which a present of it waits for (advancePresent()).
++        struct ShownFramebuffer {
++            uint32_t address = 0;
++            uint32_t width = 0;
++            uint8_t siz = 0;
++            uint64_t workloadId = 0;
++        };
++
++        std::array<ShownFramebuffer, 8> shownFramebuffers = {};
++        uint32_t shownFramebufferCursor = 0;
+         PresetDrawCallLibrary drawCallLibrary;
+         PresetLightsLibrary lightsLibrary;
+         PresetMaterialLibrary materialLibrary;
+@@ -130,6 +183,7 @@
+             float ditherNoiseStrength = 1.0f;
+             bool extendRDRAM = false;
+             bool framebufferAspect = false;
++            bool pipelineWarmUp = false;
+         };
+ 
+         Extended extended;
+@@ -145,6 +199,10 @@
+         void flush();
+         void submitFramebufferPair(FramebufferPair::FlushReason flushReason);
+         void checkRDRAM();
++        void addPendingRAMCopy(Framebuffer *fb, uint32_t rowWidth, uint32_t rowStart, uint32_t rowEnd);
++        void keepPendingRAMImage(Framebuffer *fb, uint32_t rowWidth, uint32_t rowEnd);
++        const uint8_t *keptRAM(uint32_t address, uint32_t byteCount) const;
++        void landRAMCopies(bool onlyIfReady);
+         void fullSync();
+         void fullSyncFramebufferPairTiles(Workload &workload, FramebufferPair &fbPair, uint32_t &loadOpCursor, uint32_t &rdpTileCursor);
+         void listProcessBegin();
+@@ -163,6 +221,7 @@
+         DisplayList *popReturnAddress();
+         void setRefreshRate(uint16_t refreshRate);
+         void setRenderToRAM(uint8_t renderToRAM);
++        void warmUpPipelines();
+         void setDitherNoiseStrength(float noiseStrength);
+         void setFramebufferAspect(bool enabled);
+         void setExtendedRDRAM(bool isExtended);
+--- a/src/hle/rt64_workload.cpp
++++ b/src/hle/rt64_workload.cpp
+@@ -23,6 +23,7 @@
+         extended.testZIndexCount = 0;
+         extended.ditherNoiseStrength = 1.0f;
+         extended.framebufferAspect = false;
++        extended.pipelineWarmUp = false;
+ 
+         commandWarnings.clear();
+         spriteCommands.clear();
+--- a/src/hle/rt64_workload.h
++++ b/src/hle/rt64_workload.h
+@@ -226,6 +226,12 @@
+         FramebufferStorage fbStorage;
+         uint32_t viOriginalRate;
+         hlslpp::uint2 viFbSize = {};
++        // Draws, and only to framebuffers the VI hasn't shown (State::advanceWorkload): an offscreen pass. Or draws to
++        // one it has, shownFbAddress, the last such. With RT64_GAME_FRAME_WORKLOADS either can start a game frame of
++        // several workloads (WorkloadQueue::endedGameFrame).
++        bool offscreenOnly = false;
++        bool drawsShown = false;
++        uint32_t shownFbAddress = 0;
+         DebuggerRenderer debuggerRenderer;
+         DebuggerCamera debuggerCamera;
+         std::multimap<uint32_t, uint32_t> transformIdMap;
+@@ -240,6 +246,7 @@
+             float ditherNoiseStrength = 1.0f;
+             hlslpp::float2 texcoordWrapPoint = {};
+             bool framebufferAspect = false;
++            bool pipelineWarmUp = false;
+         } extended;
+ 
+         void reset();
+--- a/src/render/rt64_projection_processor.cpp
++++ b/src/render/rt64_projection_processor.cpp
+@@ -8,6 +8,22 @@
+ #include "hle/rt64_workload_queue.h"
+ 
+ namespace RT64 {
++#if RT64_INTERPOLATE_CAMERA_EYE
++    // The eye of a view matrix, the point it moves to the origin, or false for a view without one (a zero matrix).
++    inline bool viewEye(const hlslpp::float4x4 &view, hlslpp::float3 &eye) {
++        eye = -hlslpp::mul(hlslpp::float3(view[3].xyz), hlslpp::inverse(extract3x3(view)));
++        return std::isfinite(float(eye.x)) && std::isfinite(float(eye.y)) && std::isfinite(float(eye.z));
++    }
++
++    // Puts a view's eye at a point, keeping its axes.
++    inline void setViewEye(interop::float4x4 &view, const hlslpp::float3 &eye) {
++        const hlslpp::float3 translation = -hlslpp::mul(eye, extract3x3(view));
++        view[3][0] = translation.x;
++        view[3][1] = translation.y;
++        view[3][2] = translation.z;
++    }
++#endif
++
+     inline void adjustProjectionMatrix(interop::float4x4 &matrix, const float aspectRatioScale) {
+         matrix[0][0] *= aspectRatioScale;
+         matrix[1][0] *= aspectRatioScale;
+@@ -129,6 +145,18 @@
+                 // We only interpolate the projection if the view matrix has been interpolated.
+                 const bool interpolateProjection = rigidBody->lerpTranslation || rigidBody->lerpRotation;
+                 exactViewProj = false;
++#           if RT64_INTERPOLATE_CAMERA_EYE
++                // The view's translation is the eye in the view's own axes, so lerping it took the eye of a camera far from the
++                // world's origin off the line between its two places as the camera turned, and what is near the camera swung
++                // in the frames between. The eye is lerped instead (kept at the current one when the position isn't), and
++                // each interpolated view's translation is put back from it.
++                hlslpp::float3 prevEye, curEye;
++                if (viewEye(*prevViewMatrix, prevEye) && viewEye(curViewTransform, curEye)) {
++                    setViewEye(viewMatrix, rigidBody->lerpTranslation ? hlslpp::lerp(prevEye, curEye, p.curFrameWeight) : curEye);
++                    setViewEye(prevViewTransform, rigidBody->lerpTranslation ? hlslpp::lerp(prevEye, curEye, p.prevFrameWeight) : curEye);
++                }
++#           endif
++
+                 if (interpolateProjection) {
+                     projMatrix = lerpMatrix(adjustedPrevProj, curProjTransform, p.curFrameWeight);
+                     prevProjTransform = lerpMatrix(adjustedPrevProj, curProjTransform, p.prevFrameWeight);
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -4,56 +4,108 @@
+ 
+ #include "rt64_shader_library.h"
+ 
++#include "rt64_rsp_processor.h"
++#include "rt64_vertex_processor.h"
++
+ #include "common/rt64_common.h"
+ #include "shared/rt64_bloom.h"
+ #include "shared/rt64_render_target_copy.h"
+ #include "shared/rt64_rsp_vertex_test_z.h"
+ 
+-#include "shaders/FbChangesClearCS.hlsl.spirv.h"
+-#include "shaders/FbChangesDrawColorPS.hlsl.spirv.h"
+-#include "shaders/FbChangesDrawDepthPS.hlsl.spirv.h"
+-#include "shaders/FbReadAnyChangesCS.hlsl.spirv.h"
+-#include "shaders/FbReadAnyFullCS.hlsl.spirv.h"
+-#include "shaders/FbReinterpretCS.hlsl.spirv.h"
+-#include "shaders/FbWriteColorCS.hlsl.spirv.h"
+-#include "shaders/FbWriteDepthCS.hlsl.spirv.h"
+-#include "shaders/FbWriteDepthCSMS.hlsl.spirv.h"
+-#include "shaders/GaussianFilterRGB3x3CS.hlsl.spirv.h"
+-#include "shaders/BoxFilterCS.hlsl.spirv.h"
+-#include "shaders/BloomCS.hlsl.spirv.h"
+-#include "shaders/BicubicScalingCS.hlsl.spirv.h"
+-#include "shaders/HistogramAverageCS.hlsl.spirv.h"
+-#include "shaders/HistogramClearCS.hlsl.spirv.h"
+-#include "shaders/HistogramSetCS.hlsl.spirv.h"
+-#include "shaders/IdleCS.hlsl.spirv.h"
+-#include "shaders/LuminanceHistogramCS.hlsl.spirv.h"
+-#include "shaders/RSPModifyCS.hlsl.spirv.h"
+-#include "shaders/RSPProcessCS.hlsl.spirv.h"
+-#include "shaders/RSPSmoothNormalCS.hlsl.spirv.h"
+-#include "shaders/RSPVertexTestZCS.hlsl.spirv.h"
+-#include "shaders/RSPVertexTestZCSMS.hlsl.spirv.h"
+-#include "shaders/RSPWorldCS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepthPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth2XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth4XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyColorToDepth8XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColorPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor2XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
+-#include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
+-#include "shaders/TextureCopyPS.hlsl.spirv.h"
+-#include "shaders/TextureDecodeCS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
+-#include "shaders/TextureResolveSamples8XPS.hlsl.spirv.h"
+-#include "shaders/VideoInterfacePSRegular.hlsl.spirv.h"
+-#include "shaders/VideoInterfacePSPixel.hlsl.spirv.h"
+-#include "shaders/FullScreenVS.hlsl.spirv.h"
+-#include "shaders/Im3DVS.hlsl.spirv.h"
+-#include "shaders/ComposePS.hlsl.spirv.h"
+-#include "shaders/DebugPS.hlsl.spirv.h"
+-#include "shaders/Im3DPS.hlsl.spirv.h"
+-#include "shaders/PostProcessPS.hlsl.spirv.h"
++#if defined(RT64_WGSL)
++#   include "shaders/FbChangesClearCS.hlsl.wgsl.h"
++#   include "shaders/FbChangesDrawColorPS.hlsl.wgsl.h"
++#   include "shaders/FbChangesDrawDepthPS.hlsl.wgsl.h"
++#   include "shaders/FbReadAnyChangesCS.hlsl.wgsl.h"
++#   include "shaders/FbReadAnyFullCS.hlsl.wgsl.h"
++#   include "shaders/FbReinterpretCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteColorCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteDepthCS.hlsl.wgsl.h"
++#   include "shaders/FbWriteDepthCSMS.hlsl.wgsl.h"
++#   include "shaders/GaussianFilterRGB3x3CS.hlsl.wgsl.h"
++#   include "shaders/BoxFilterCS.hlsl.wgsl.h"
++#   include "shaders/BloomCS.hlsl.wgsl.h"
++#   include "shaders/BicubicScalingCS.hlsl.wgsl.h"
++#   include "shaders/HistogramAverageCS.hlsl.wgsl.h"
++#   include "shaders/HistogramClearCS.hlsl.wgsl.h"
++#   include "shaders/HistogramSetCS.hlsl.wgsl.h"
++#   include "shaders/IdleCS.hlsl.wgsl.h"
++#   include "shaders/LuminanceHistogramCS.hlsl.wgsl.h"
++#   include "shaders/RSPModifyCS.hlsl.wgsl.h"
++#   include "shaders/RSPProcessCS.hlsl.wgsl.h"
++#   include "shaders/RSPSmoothNormalCS.hlsl.wgsl.h"
++#   include "shaders/RSPVertexTestZCS.hlsl.wgsl.h"
++#   include "shaders/RSPVertexTestZCSMS.hlsl.wgsl.h"
++#   include "shaders/RSPWorldCS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepthPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth2XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth4XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyColorToDepth8XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColorPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor2XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor4XPS.hlsl.wgsl.h"
++#   include "shaders/RtCopyDepthToColor8XPS.hlsl.wgsl.h"
++#   include "shaders/TextureCopyPS.hlsl.wgsl.h"
++#   include "shaders/TextureDecodeCS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples2XPS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples4XPS.hlsl.wgsl.h"
++#   include "shaders/TextureResolveSamples8XPS.hlsl.wgsl.h"
++#   include "shaders/VideoInterfacePSRegular.hlsl.wgsl.h"
++#   include "shaders/VideoInterfacePSPixel.hlsl.wgsl.h"
++#   include "shaders/FullScreenVS.hlsl.wgsl.h"
++#   include "shaders/Im3DVS.hlsl.wgsl.h"
++#   include "shaders/ComposePS.hlsl.wgsl.h"
++#   include "shaders/DebugPS.hlsl.wgsl.h"
++#   include "shaders/Im3DPS.hlsl.wgsl.h"
++#   include "shaders/PostProcessPS.hlsl.wgsl.h"
++#else
++#   include "shaders/FbChangesClearCS.hlsl.spirv.h"
++#   include "shaders/FbChangesDrawColorPS.hlsl.spirv.h"
++#   include "shaders/FbChangesDrawDepthPS.hlsl.spirv.h"
++#   include "shaders/FbReadAnyChangesCS.hlsl.spirv.h"
++#   include "shaders/FbReadAnyFullCS.hlsl.spirv.h"
++#   include "shaders/FbReinterpretCS.hlsl.spirv.h"
++#   include "shaders/FbWriteColorCS.hlsl.spirv.h"
++#   include "shaders/FbWriteDepthCS.hlsl.spirv.h"
++#   include "shaders/FbWriteDepthCSMS.hlsl.spirv.h"
++#   include "shaders/GaussianFilterRGB3x3CS.hlsl.spirv.h"
++#   include "shaders/BoxFilterCS.hlsl.spirv.h"
++#   include "shaders/BloomCS.hlsl.spirv.h"
++#   include "shaders/BicubicScalingCS.hlsl.spirv.h"
++#   include "shaders/HistogramAverageCS.hlsl.spirv.h"
++#   include "shaders/HistogramClearCS.hlsl.spirv.h"
++#   include "shaders/HistogramSetCS.hlsl.spirv.h"
++#   include "shaders/IdleCS.hlsl.spirv.h"
++#   include "shaders/LuminanceHistogramCS.hlsl.spirv.h"
++#   include "shaders/RSPModifyCS.hlsl.spirv.h"
++#   include "shaders/RSPProcessCS.hlsl.spirv.h"
++#   include "shaders/RSPSmoothNormalCS.hlsl.spirv.h"
++#   include "shaders/RSPVertexTestZCS.hlsl.spirv.h"
++#   include "shaders/RSPVertexTestZCSMS.hlsl.spirv.h"
++#   include "shaders/RSPWorldCS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepthPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth2XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth4XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyColorToDepth8XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColorPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor2XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor4XPS.hlsl.spirv.h"
++#   include "shaders/RtCopyDepthToColor8XPS.hlsl.spirv.h"
++#   include "shaders/TextureCopyPS.hlsl.spirv.h"
++#   include "shaders/TextureDecodeCS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples2XPS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples4XPS.hlsl.spirv.h"
++#   include "shaders/TextureResolveSamples8XPS.hlsl.spirv.h"
++#   include "shaders/VideoInterfacePSRegular.hlsl.spirv.h"
++#   include "shaders/VideoInterfacePSPixel.hlsl.spirv.h"
++#   include "shaders/FullScreenVS.hlsl.spirv.h"
++#   include "shaders/Im3DVS.hlsl.spirv.h"
++#   include "shaders/ComposePS.hlsl.spirv.h"
++#   include "shaders/DebugPS.hlsl.spirv.h"
++#   include "shaders/DebugPSPerDraw.hlsl.spirv.h"
++#   include "shaders/Im3DPS.hlsl.spirv.h"
++#   include "shaders/PostProcessPS.hlsl.spirv.h"
++#endif
+ 
+ #ifdef _WIN32
+ #   include "shaders/FbChangesClearCS.hlsl.dxil.h"
+@@ -157,22 +209,30 @@
+ #include "rt64_descriptor_sets.h"
+ #include "rt64_render_target.h"
+ 
+-#ifdef _WIN32
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? DXIL_BLOB : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? sizeof(DXIL_BLOB) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++// The shader's blobs are <NAME>BlobDXIL, <NAME>BlobSPIRV, <NAME>BlobMSL and <NAME>BlobWGSL; a build has the formats its
++// platform can use, and a WGSL build (WebGPU) only that one.
++#if defined(RT64_WGSL)
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::WGSL) ? NAME##BlobWGSL : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::WGSL) ? sizeof(NAME##BlobWGSL) : 0,\
++        ENTRY_NAME,\
++        SHADER_FORMAT
++#elif defined(_WIN32)
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? NAME##BlobDXIL : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::DXIL) ? sizeof(NAME##BlobDXIL) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #elif defined(__APPLE__)
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::METAL) ? MSL_BLOB : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::METAL) ? sizeof(MSL_BLOB) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::METAL) ? NAME##BlobMSL : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::METAL) ? sizeof(NAME##BlobMSL) : (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #else
+-#   define CREATE_SHADER_INPUTS(DXIL_BLOB, SPIRV_BLOB, MSL_BLOB, ENTRY_NAME, SHADER_FORMAT)\
+-        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? SPIRV_BLOB : nullptr,\
+-        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(SPIRV_BLOB) : 0,\
++#   define CREATE_SHADER_INPUTS(NAME, ENTRY_NAME, SHADER_FORMAT)\
++        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? NAME##BlobSPIRV : nullptr,\
++        (SHADER_FORMAT == RenderShaderFormat::SPIRV) ? sizeof(NAME##BlobSPIRV) : 0,\
+         ENTRY_NAME,\
+         SHADER_FORMAT
+ #endif
+@@ -198,7 +258,7 @@
+         RenderPipelineLayoutBuilder layoutBuilder;
+ 
+         // Create shaders shared across all pipelines.
+-        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVSBlobDXIL, FullScreenVSBlobSPIRV, FullScreenVSBlobMSL, "VSMain", shaderFormat));
++        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVS, "VSMain", shaderFormat));
+         
+         auto fillSamplerSet = [&](SamplerSet &set, RenderFilter filter, bool anisotropyEnabled) {
+             RenderSamplerDesc samplerDesc;
+@@ -267,7 +327,7 @@
+             layoutBuilder.end();
+             bicubicScaling.pipelineLayout = layoutBuilder.create(device);
+             
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BicubicScalingCSBlobDXIL, BicubicScalingCSBlobSPIRV, BicubicScalingCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BicubicScalingCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(bicubicScaling.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             bicubicScaling.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -281,7 +341,7 @@
+             layoutBuilder.end();
+             boxFilter.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BoxFilterCSBlobDXIL, BoxFilterCSBlobSPIRV, BoxFilterCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BoxFilterCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(boxFilter.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             boxFilter.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -295,7 +355,7 @@
+             layoutBuilder.end();
+             bloom.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BloomCSBlobDXIL, BloomCSBlobSPIRV, BloomCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(BloomCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(bloom.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             bloom.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -308,7 +368,7 @@
+             layoutBuilder.end();
+             compose.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(ComposePSBlobDXIL, ComposePSBlobSPIRV, ComposePSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(ComposePS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = compose.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -368,7 +428,7 @@
+             layoutBuilder.end();
+             idle.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(IdleCSBlobDXIL, IdleCSBlobSPIRV, IdleCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(IdleCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(idle.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             idle.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -381,7 +441,7 @@
+             layoutBuilder.end();
+             fbChangesClear.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesClearCSBlobDXIL, FbChangesClearCSBlobSPIRV, FbChangesClearCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesClearCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(fbChangesClear.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             fbChangesClear.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -398,10 +458,10 @@
+             fbReadAnyChanges.pipelineLayout = layoutBuilder.create(device);
+             fbReadAnyFull.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> anyChangesShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyChangesCSBlobDXIL, FbReadAnyChangesCSBlobSPIRV, FbReadAnyChangesCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> anyChangesShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyChangesCS, "CSMain", shaderFormat));
+             fbReadAnyChanges.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbReadAnyChanges.pipelineLayout.get(), anyChangesShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> fullShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyFullCSBlobDXIL, FbReadAnyFullCSBlobSPIRV, FbReadAnyFullCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> fullShader = device->createShader(CREATE_SHADER_INPUTS(FbReadAnyFullCS, "CSMain", shaderFormat));
+             fbReadAnyFull.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbReadAnyFull.pipelineLayout.get(), fullShader.get(), 8, 8, 1));
+         }
+ 
+@@ -414,7 +474,7 @@
+             layoutBuilder.end();
+             fbReinterpret.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbReinterpretCSBlobDXIL, FbReinterpretCSBlobSPIRV, FbReinterpretCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(FbReinterpretCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(fbReinterpret.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             fbReinterpret.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -432,13 +492,13 @@
+             fbWriteDepth.pipelineLayout = layoutBuilder.create(device);
+             fbWriteDepthMS.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteColorCSBlobDXIL, FbWriteColorCSBlobSPIRV, FbWriteColorCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteColorCS, "CSMain", shaderFormat));
+             fbWriteColor.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteColor.pipelineLayout.get(), colorShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSBlobDXIL, FbWriteDepthCSBlobSPIRV, FbWriteDepthCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCS, "CSMain", shaderFormat));
+             fbWriteDepth.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteDepth.pipelineLayout.get(), depthShader.get(), 8, 8, 1));
+ 
+-            std::unique_ptr<RenderShader> depthShaderMS = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSMSBlobDXIL, FbWriteDepthCSMSBlobSPIRV, FbWriteDepthCSMSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShaderMS = device->createShader(CREATE_SHADER_INPUTS(FbWriteDepthCSMS, "CSMain", shaderFormat));
+             fbWriteDepthMS.pipeline = device->createComputePipeline(RenderComputePipelineDesc(fbWriteDepthMS.pipelineLayout.get(), depthShaderMS.get(), 8, 8, 1));
+         }
+ 
+@@ -451,7 +511,7 @@
+             layoutBuilder.end();
+             gaussianFilterRGB3x3.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(GaussianFilterRGB3x3CSBlobDXIL, GaussianFilterRGB3x3CSBlobSPIRV, GaussianFilterRGB3x3CSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(GaussianFilterRGB3x3CS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(gaussianFilterRGB3x3.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             gaussianFilterRGB3x3.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -465,7 +525,7 @@
+             layoutBuilder.end();
+             histogramAverage.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramAverageCSBlobDXIL, HistogramAverageCSBlobSPIRV, HistogramAverageCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramAverageCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramAverage.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             histogramAverage.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -478,7 +538,7 @@
+             layoutBuilder.end();
+             histogramClear.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramClearCSBlobDXIL, HistogramClearCSBlobSPIRV, HistogramClearCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramClearCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramClear.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             histogramClear.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -492,7 +552,7 @@
+             layoutBuilder.end();
+             histogramSet.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramSetCSBlobDXIL, HistogramSetCSBlobSPIRV, HistogramSetCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(HistogramSetCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(histogramSet.pipelineLayout.get(), computeShader.get(), 1, 1, 1);
+             histogramSet.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -506,7 +566,7 @@
+             layoutBuilder.end();
+             luminanceHistogram.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(LuminanceHistogramCSBlobDXIL, LuminanceHistogramCSBlobSPIRV, LuminanceHistogramCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(LuminanceHistogramCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(luminanceHistogram.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             luminanceHistogram.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -520,7 +580,7 @@
+             layoutBuilder.end();
+             rspModify.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPModifyCSBlobDXIL, RSPModifyCSBlobSPIRV, RSPModifyCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPModifyCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspModify.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspModify.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -529,12 +589,12 @@
+         {
+             RSPProcessDescriptorSet descriptorSet;
+             layoutBuilder.begin();
+-            layoutBuilder.addPushConstant(0, 0, sizeof(uint32_t) * 4, RenderShaderStageFlag::COMPUTE);
++            layoutBuilder.addPushConstant(0, 0, sizeof(RSPProcessor::ProcessCB), RenderShaderStageFlag::COMPUTE);
+             layoutBuilder.addDescriptorSet(descriptorSet);
+             layoutBuilder.end();
+             rspProcess.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPProcessCSBlobDXIL, RSPProcessCSBlobSPIRV, RSPProcessCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPProcessCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspProcess.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspProcess.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -548,7 +608,7 @@
+             layoutBuilder.end();
+             rspSmoothNormal.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPSmoothNormalCSBlobDXIL, RSPSmoothNormalCSBlobSPIRV, RSPSmoothNormalCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPSmoothNormalCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspSmoothNormal.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspSmoothNormal.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -557,12 +617,12 @@
+         {
+             RSPWorldDescriptorSet descriptorSet;
+             layoutBuilder.begin();
+-            layoutBuilder.addPushConstant(0, 0, sizeof(uint32_t) * 4, RenderShaderStageFlag::COMPUTE);
++            layoutBuilder.addPushConstant(0, 0, sizeof(VertexProcessor::WorldCB), RenderShaderStageFlag::COMPUTE);
+             layoutBuilder.addDescriptorSet(descriptorSet);
+             layoutBuilder.end();
+             rspWorld.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPWorldCSBlobDXIL, RSPWorldCSBlobSPIRV, RSPWorldCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPWorldCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(rspWorld.pipelineLayout.get(), computeShader.get(), 64, 1, 1);
+             rspWorld.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+@@ -576,7 +636,7 @@
+             layoutBuilder.end();
+             textureCopy.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(TextureCopyPSBlobDXIL, TextureCopyPSBlobSPIRV, TextureCopyPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(TextureCopyPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = textureCopy.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+@@ -596,15 +656,15 @@
+             layoutBuilder.end();
+             textureDecode.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(TextureDecodeCSBlobDXIL, TextureDecodeCSBlobSPIRV, TextureDecodeCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(TextureDecodeCS, "CSMain", shaderFormat));
+             RenderComputePipelineDesc pipelineDesc(textureDecode.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
+             textureDecode.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+ 
+         // Video Interface.
+         {
+-            std::unique_ptr<RenderShader> regularShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSRegularBlobDXIL, VideoInterfacePSRegularBlobSPIRV, VideoInterfacePSRegularBlobMSL, "PSMain", shaderFormat));
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSPixelBlobDXIL, VideoInterfacePSPixelBlobSPIRV, VideoInterfacePSPixelBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> regularShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSRegular, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(VideoInterfacePSPixel, "PSMain", shaderFormat));
+ 
+             VideoInterfaceDescriptorSet nearestDescriptorSet(samplerLibrary.nearest.borderBorder.get(), samplerLibrary.linear.clampClamp.get());
+             VideoInterfaceDescriptorSet linearDescriptorSet(samplerLibrary.linear.borderBorder.get(), samplerLibrary.linear.clampClamp.get());
+@@ -617,7 +677,7 @@
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.vertexShader = fullScreenVertexShader.get();
+             pipelineDesc.pixelShader = regularShader.get();
+-            pipelineDesc.renderTargetFormat[0] = RenderFormat::B8G8R8A8_UNORM; // TODO: Use whatever format the swap chain was created with.
++            pipelineDesc.renderTargetFormat[0] = device->getCapabilities().preferredSwapChainFormat;
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+             pipelineDesc.renderTargetCount = 1;
+             pipelineDesc.pipelineLayout = videoInterfaceNearest.pipelineLayout.get();
+@@ -650,7 +710,7 @@
+         RenderPipelineLayoutBuilder layoutBuilder;
+ 
+         // Create shaders shared across all pipelines.
+-        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVSBlobDXIL, FullScreenVSBlobSPIRV, FullScreenVSBlobMSL, "VSMain", shaderFormat));
++        std::unique_ptr<RenderShader> fullScreenVertexShader = device->createShader(CREATE_SHADER_INPUTS(FullScreenVS, "VSMain", shaderFormat));
+ 
+         // Select shader blobs based on sample count.
+         const void *TextureResolvePSBlob = nullptr;
+@@ -735,6 +795,41 @@
+         }
+         else
+ #   endif
++#   if defined(RT64_WGSL)
++        if (shaderFormat == RenderShaderFormat::WGSL) {
++            RtCopyDepthToColorPSBlob = RtCopyDepthToColorPSBlobWGSL;
++            RtCopyDepthToColorPSBlobSize = std::size(RtCopyDepthToColorPSBlobWGSL);
++            RtCopyColorToDepthPSBlob = RtCopyColorToDepthPSBlobWGSL;
++            RtCopyColorToDepthPSBlobSize = std::size(RtCopyColorToDepthPSBlobWGSL);
++
++            switch (multisampling.sampleCount) {
++            case RenderSampleCount::COUNT_2:
++                TextureResolvePSBlob = TextureResolveSamples2XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples2XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor2XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor2XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth2XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth2XPSBlobWGSL);
++                break;
++            case RenderSampleCount::COUNT_4:
++                TextureResolvePSBlob = TextureResolveSamples4XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples4XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor4XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor4XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth4XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth4XPSBlobWGSL);
++                break;
++            case RenderSampleCount::COUNT_8:
++                TextureResolvePSBlob = TextureResolveSamples8XPSBlobWGSL;
++                TextureResolvePSBlobSize = std::size(TextureResolveSamples8XPSBlobWGSL);
++                RtCopyDepthToColorPSMSBlob = RtCopyDepthToColor8XPSBlobWGSL;
++                RtCopyDepthToColorPSMSBlobSize = std::size(RtCopyDepthToColor8XPSBlobWGSL);
++                RtCopyColorToDepthPSMSBlob = RtCopyColorToDepth8XPSBlobWGSL;
++                RtCopyColorToDepthPSMSBlobSize = std::size(RtCopyColorToDepth8XPSBlobWGSL);
++                break;
++            }
++        }
++#   else
+         if (shaderFormat == RenderShaderFormat::SPIRV) {
+             RtCopyDepthToColorPSBlob = RtCopyDepthToColorPSBlobSPIRV;
+             RtCopyDepthToColorPSBlobSize = std::size(RtCopyDepthToColorPSBlobSPIRV);
+@@ -768,6 +863,7 @@
+                 break;
+             }
+         }
++#   endif
+         else {
+             assert(false && "Unknown shader format.");
+         }
+@@ -782,7 +878,7 @@
+             fbChangesDrawColor.pipelineLayout = layoutBuilder.create(device);
+             fbChangesDrawDepth.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawColorPSBlobDXIL, FbChangesDrawColorPSBlobSPIRV, FbChangesDrawColorPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> colorShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawColorPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = fbChangesDrawColor.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::Copy();
+@@ -793,13 +889,13 @@
+             pipelineDesc.multisampling = multisampling;
+             fbChangesDrawColor.pipeline = device->createGraphicsPipeline(pipelineDesc);
+ 
+-            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawDepthPSBlobDXIL, FbChangesDrawDepthPSBlobSPIRV, FbChangesDrawDepthPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> depthShader = device->createShader(CREATE_SHADER_INPUTS(FbChangesDrawDepthPS, "PSMain", shaderFormat));
+             pipelineDesc.pipelineLayout = fbChangesDrawDepth.pipelineLayout.get();
+             pipelineDesc.pixelShader = depthShader.get();
+             pipelineDesc.depthEnabled = true;
+             pipelineDesc.depthFunction = RenderComparisonFunction::ALWAYS;
+             pipelineDesc.depthWriteEnabled = true;
+-            pipelineDesc.depthTargetFormat = RenderFormat::D32_FLOAT;
++            pipelineDesc.depthTargetFormat = RenderTarget::depthBufferFormat();
+             fbChangesDrawDepth.pipeline = device->createGraphicsPipeline(pipelineDesc);
+         }
+ 
+@@ -836,7 +932,7 @@
+             pipelineDesc.depthEnabled = true;
+             pipelineDesc.depthFunction = RenderComparisonFunction::ALWAYS;
+             pipelineDesc.depthWriteEnabled = true;
+-            pipelineDesc.depthTargetFormat = RenderFormat::D32_FLOAT;
++            pipelineDesc.depthTargetFormat = RenderTarget::depthBufferFormat();
+             pipelineDesc.pipelineLayout = rtCopyColorToDepth.pipelineLayout.get();
+             pipelineDesc.pixelShader = colorToDepthShader.get();
+             pipelineDesc.multisampling = RenderMultisampling();
+@@ -858,7 +954,7 @@
+             layoutBuilder.end();
+             postProcess.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(PostProcessPSBlobDXIL, PostProcessPSBlobSPIRV, PostProcessPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(PostProcessPS, "PSMain", shaderFormat));
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = postProcess.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -873,17 +969,25 @@
+         // Raytracing debug.
+         {
+             FramebufferRendererDescriptorCommonSet descriptorCommonSet(samplerLibrary, deviceCapabilities.raytracing);
+-            FramebufferRendererDescriptorTextureSet descriptorTextureSet;
+             FramebufferRendererDescriptorFramebufferSet descriptorFramebufferSet;
+             layoutBuilder.begin();
+             layoutBuilder.addDescriptorSet(descriptorCommonSet);
+-            layoutBuilder.addDescriptorSet(descriptorTextureSet);
+-            layoutBuilder.addDescriptorSet(descriptorTextureSet);
++            addFramebufferRendererTextureSets(layoutBuilder, deviceCapabilities);
+             layoutBuilder.addDescriptorSet(descriptorFramebufferSet);
+             layoutBuilder.end();
+             debug.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> pixelShader = device->createShader(CREATE_SHADER_INPUTS(DebugPSBlobDXIL, DebugPSBlobSPIRV, DebugPSBlobMSL, "PSMain", shaderFormat));
++            std::unique_ptr<RenderShader> pixelShader;
++#       if !defined(RT64_WGSL)
++            if (shaderFormat == RenderShaderFormat::SPIRV) {
++                const SPIRVBlob blob = RT64_TEXTURE_SETS_SPIRV(DebugPS, deviceCapabilities);
++                pixelShader = device->createShader(blob.data, blob.size, "PSMain", shaderFormat);
++            }
++            else
++#       endif
++            {
++                pixelShader = device->createShader(CREATE_SHADER_INPUTS(DebugPS, "PSMain", shaderFormat));
++            }
+             RenderGraphicsPipelineDesc pipelineDesc;
+             pipelineDesc.pipelineLayout = debug.pipelineLayout.get();
+             pipelineDesc.renderTargetBlend[0] = RenderBlendDesc::AlphaBlend();
+@@ -907,10 +1011,10 @@
+             rspVertexTestZ.pipelineLayout = layoutBuilder.create(device);
+             rspVertexTestZMS.pipelineLayout = layoutBuilder.create(device);
+ 
+-            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSBlobDXIL, RSPVertexTestZCSBlobSPIRV, RSPVertexTestZCSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCS, "CSMain", shaderFormat));
+             rspVertexTestZ.pipeline = device->createComputePipeline(RenderComputePipelineDesc(rspVertexTestZ.pipelineLayout.get(), computeShader.get(), 1, 1, 1));
+ 
+-            std::unique_ptr<RenderShader> computeShaderMS = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSMSBlobDXIL, RSPVertexTestZCSMSBlobSPIRV, RSPVertexTestZCSMSBlobMSL, "CSMain", shaderFormat));
++            std::unique_ptr<RenderShader> computeShaderMS = device->createShader(CREATE_SHADER_INPUTS(RSPVertexTestZCSMS, "CSMain", shaderFormat));
+             rspVertexTestZMS.pipeline = device->createComputePipeline(RenderComputePipelineDesc(rspVertexTestZMS.pipelineLayout.get(), computeShaderMS.get(), 1, 1, 1));
+         }
+ 

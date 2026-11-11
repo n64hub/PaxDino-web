@@ -1,1 +1,8 @@
 # merged from N64Recomp-browser 15bfbca51a924c29eb6949088a381395a6d3e8d0
+rt64 src/common/rt64_math.cpp
+rt64 src/gbi/rt64_gbi.cpp
+rt64 src/hle/rt64_state.h
+rt64 src/hle/rt64_workload.cpp
+rt64 src/hle/rt64_workload.h
+rt64 src/render/rt64_projection_processor.cpp
+rt64 src/render/rt64_shader_library.cpp
