@@ -1,3 +1,24 @@
+# The files where this game's own patches (lib-patches/) change the same lines as N64Recomp-browser's web support:
+# <project> <path in the project>. tools/build_web.sh leaves each out of N64Recomp-browser's patch for its project and
+# applies web/patches/<project>.patch in its place, the web's change to these files merged by hand on top of the
+# game's. The web's later changes to them are merged in by apply.cmake --since from the commit below; one that meets
+# the game's own lines stops the build, for another merge by hand and this commit moved. A file followed by own is left
+# to the game alone: the web's change to it is left out, then and later.
+#
+# rt64: rt64_math.cpp keeps the game's decomposition of a view-projection (least squares over the three rows, its
+# 0001), which mends what the web's (the row where the view's Z axis is largest) mends, one way. rt64_gbi.cpp has the
+# web's L3DEX2.fifo 2.06 and the game's Acclaim L3DEX2 (its 0002), which the web leaves Unknown. The extended GBI's
+# flags (state.h, workload.h and .cpp) are both: the game's framebufferAspect and the web's pipelineWarmUp. In
+# rt64_projection_processor.cpp the game's exactViewProj goes before the web's interpolated camera eye. In
+# rt64_shader_library.cpp the game's BloomCS (its 0006) is in the web's WGSL list too, and made with the web's
+# CREATE_SHADER_INPUTS, which takes the shader's name.
+# N64ModernRuntime: in audio.cpp the web's check of a sound buffer's address comes first, then the game's count of the
+# bytes deterministic mode (netplay, its 0004) plays. In mesgqueue.cpp the game's message source for deterministic
+# mode's order and the web's held blocked messages are both kept: deterministic mode returns before the web's paths.
+# threadqueue.cpp walks the queue the game's way (it clears the thread's queue too) after the web's check of a null
+# queue.
+# N64Recomp: analysis.cpp is the game's, whose 0001 finds a jump table in another section, as the web's change to it
+# (its only one) does for GoldenEye.
 # merged from N64Recomp-browser 15bfbca51a924c29eb6949088a381395a6d3e8d0
 rt64 src/common/rt64_math.cpp
 rt64 src/gbi/rt64_gbi.cpp
