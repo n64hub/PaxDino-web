@@ -8,6 +8,21 @@ cmake_minimum_required(VERSION 3.20)
 
 project(PaxDino LANGUAGES C CXX)
 
+# The web page (tools/build_web.sh, BUILDING.md's The web page): threads, wasm exceptions, SIMD (hlslpp's wasm backend
+# and the auto-vectorizer) and tail calls (recomp.h's RECOMP_TAIL_CALL in the recompiled code) for every target.
+# xxHash's NEON path through Emscripten's arm_neon.h doesn't compile in C++.
+if (EMSCRIPTEN)
+    add_compile_options(-pthread -fwasm-exceptions -msimd128 -mtail-call "-DXXH_HAS_INCLUDE(x)=0")
+    add_link_options(-pthread -fwasm-exceptions -mtail-call)
+    # ccache when it is on PATH.
+    include(${CMAKE_SOURCE_DIR}/lib/N64Recomp-browser/frontend/build_speed.cmake)
+    # The shaders the page specializes at build time: the boot's before the game starts, each section's when the game
+    # first draws there (web/rt64_shaders.txt says how it was recorded).
+    if (EXISTS ${CMAKE_SOURCE_DIR}/web/rt64_shaders.txt)
+        set(RT64_PREBUILT_SHADER_LIST ${CMAKE_SOURCE_DIR}/web/rt64_shaders.txt)
+    endif()
+endif()
+
 # The submodules (N64ModernRuntime, rt64, RecompFrontend) and SlotMap live in
 # lib/. TRW_LIB_DIR can point elsewhere for a tree that keeps them outside the
 # checkout; lib-patches/ is applied to whatever it points at.
@@ -75,18 +90,27 @@ add_compile_definitions(
     __PRFCHWINTRIN_H
 )
 
-# Local fixes to the submodules (lib-patches/), applied at configure time.
+# Local fixes to the submodules (lib-patches/), applied at configure time. The page's tools/build_web.sh applies them
+# itself, under the web's: applied here they would reset the submodules and take the web's out.
 include(${CMAKE_SOURCE_DIR}/cmake/ApplyLibPatches.cmake)
-trw_apply_lib_patches(rt64 rt64)
-trw_apply_lib_patches(N64Recomp N64ModernRuntime/N64Recomp)
-trw_apply_lib_patches(N64ModernRuntime N64ModernRuntime)
-trw_apply_lib_patches(RecompFrontend RecompFrontend)
+if (NOT EMSCRIPTEN)
+    trw_apply_lib_patches(rt64 rt64)
+    trw_apply_lib_patches(N64Recomp N64ModernRuntime/N64Recomp)
+    trw_apply_lib_patches(N64ModernRuntime N64ModernRuntime)
+    trw_apply_lib_patches(RecompFrontend RecompFrontend)
+endif()
 
 add_subdirectory(${TRW_LIB_DIR}/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
 set(BUILD_SHARED_LIBS OFF)
 
 add_subdirectory(${TRW_LIB_DIR}/N64ModernRuntime ${CMAKE_BINARY_DIR}/N64ModernRuntime)
+
+# The page: N64Recomp-browser's frontend/ (the page shell, the file picker, sound, the cross-origin service worker).
+if (EMSCRIPTEN)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64Recomp-browser/frontend ${CMAKE_BINARY_DIR}/web_frontend)
+    target_compile_options(fmt PRIVATE -include cstdlib)
+endif()
 
 
 target_include_directories(rt64 PRIVATE ${CMAKE_BINARY_DIR}/rt64/src)
@@ -134,6 +158,11 @@ if (NOT FUNC_C_SOURCES AND NOT FUNC_CXX_SOURCES)
 endif()
 
 target_sources(RecompiledFuncs PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
+
+# wasm-ld turns a call through a wrong implicit declaration into a trap, so on the web it is an error instead.
+if (EMSCRIPTEN)
+    target_compile_options(RecompiledFuncs PRIVATE -Werror=implicit-function-declaration)
+endif()
 
 
 # Main executable
@@ -319,6 +348,9 @@ set (DXC_RT_OPTS "${DXC_COMMON_OPTS}" "-D" "RT_SHADER" "-T" "lib_6_3" "-fspv-tar
 if (${WIN32})
     set (DXC "${TRW_LIB_DIR}/rt64/src/contrib/dxc/bin/x64/dxc.exe")
     add_compile_definitions(NOMINMAX)
+elseif (EMSCRIPTEN)
+    # DXC runs on the machine that builds, which for the page isn't the 32-bit target.
+    set (DXC "LD_LIBRARY_PATH=${TRW_LIB_DIR}/rt64/src/contrib/dxc/lib/x64" "${TRW_LIB_DIR}/rt64/src/contrib/dxc/bin/x64/dxc-linux")
 else()
         if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
             set (DXC "LD_LIBRARY_PATH=${TRW_LIB_DIR}/rt64/src/contrib/dxc/lib/x64" "${TRW_LIB_DIR}/rt64/src/contrib/dxc/bin/x64/dxc-linux")
@@ -363,16 +395,28 @@ target_link_libraries(PaxDino PRIVATE
     librecomp
     ultramodern
     rt64
-    nfd
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:nfd>
     ${TRW_LINK_GROUP_END}
 )
+
+# The page reads assets/ (the fonts, the controller database, the launcher's pictures) from its preloaded file system,
+# and asks the page for files where the desktop opens a native dialog.
+if (EMSCRIPTEN)
+    n64recomp_browser_frontend_page(PaxDino)
+    target_link_options(PaxDino PRIVATE "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/assets@/assets")
+endif()
 
 
 # RSP audio microcode: rsp/aspMain.cpp is generated from the ROM by
 # RSPRecomp (aspMain.us.toml), like RecompiledFuncs/, so it's gitignored and
 # only built when the ROM is present.
 set(TRW_ROM_PATH "${CMAKE_SOURCE_DIR}/turokrw.us.z64")
-if (EXISTS "${TRW_ROM_PATH}")
+if (EMSCRIPTEN)
+    # tools/build_web.sh runs RSPRecomp natively: the one built here would be wasm.
+    if (EXISTS ${CMAKE_SOURCE_DIR}/rsp/aspMain.cpp)
+        target_compile_definitions(PaxDino PRIVATE TRW_HAS_RSP_AUDIO)
+    endif()
+elseif (EXISTS "${TRW_ROM_PATH}")
     list(REMOVE_ITEM SOURCES ${CMAKE_SOURCE_DIR}/rsp/aspMain.cpp)
     add_custom_command(OUTPUT ${CMAKE_SOURCE_DIR}/rsp/aspMain.cpp
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_SOURCE_DIR}/rsp

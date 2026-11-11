@@ -59,11 +59,20 @@ namespace {
         auto e = [](auto value) { return recomp::config::ConfigValueVariant{ static_cast<uint32_t>(value) }; };
 
         recomp::config::Config& graphics = recompui::config::get_graphics_config();
+#ifdef __EMSCRIPTEN__
+        // A page draws at the canvas's size and interpolates to the display's rate in either preset, with no
+        // downsampling (four times the pixels drawn) or MSAA (WebGPU has no sample positions).
+        graphics.update_option_value(gfx::res_option, e(Resolution::Auto));
+        graphics.update_option_value(gfx::ds_option, e(kDownsampleOff));
+        graphics.update_option_value(gfx::rr_option, e(RefreshRate::Display));
+        graphics.update_option_value(gfx::msaa_option, e(Antialiasing::None));
+#else
         graphics.update_option_value(gfx::res_option, e(modern ? Resolution::Original2x : Resolution::Original));
         graphics.update_option_value(gfx::ds_option, e(modern ? kDownsample4x : kDownsampleOff));
-        graphics.update_option_value(gfx::ar_option, e(modern ? AspectRatio::Expand : AspectRatio::Original));
         graphics.update_option_value(gfx::rr_option, e(modern ? RefreshRate::Display : RefreshRate::Original));
         graphics.update_option_value(gfx::msaa_option, e(modern ? modern_msaa(graphics) : static_cast<uint32_t>(Antialiasing::None)));
+#endif
+        graphics.update_option_value(gfx::ar_option, e(modern ? AspectRatio::Expand : AspectRatio::Original));
         graphics.update_option_value("bloom", e(modern ? trw::config::Bloom::Low : trw::config::Bloom::Off));
         graphics.update_option_value(gfx::hr_option, e(modern ? HUDRatioMode::Full : HUDRatioMode::Original));
         graphics.update_option_value("screen_filter", e(modern ? trw::config::ScreenFilter::Scanlines : trw::config::ScreenFilter::None));

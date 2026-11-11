@@ -25,7 +25,9 @@
 #include <filesystem>
 #include <exception>
 
-#include "nfd.h"
+#ifndef __EMSCRIPTEN__
+#include "nfd.h" // a browser has no native file dialogs; RecompFrontend asks the page instead
+#endif
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -68,6 +70,10 @@ extern char** environ;
 #include "trw_launcher_art.h"
 #include "trw_presets.h"
 #include "trw_music.h"
+
+#ifdef __EMSCRIPTEN__
+#include "audio_output.h"
+#endif
 
 #if defined(TRW_HAS_APP_ICON)
 #include "icon_bytes.h"
@@ -160,7 +166,12 @@ static ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     }
     SDL_SetHint(SDL_HINT_GAMECONTROLLERCONFIG_FILE, controller_db.c_str());
 
+#ifdef __EMSCRIPTEN__
+    // Emscripten's SDL2 has no haptics, and SDL_Init fails as a whole when asked for them.
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK) != 0) {
+#else
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC) != 0) {
+#endif
         exit_error("Failed to initialize SDL2: %s", SDL_GetError());
     }
     fprintf(stderr, "[TRW] controller mappings from %s: %d known in all\n", controller_db.c_str(), SDL_GameControllerNumMappings());
@@ -241,7 +252,8 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
         exit_error("Failed to get window info: %s", SDL_GetError());
     }
     return ultramodern::renderer::WindowHandle{ wm_info.info.win.window, GetCurrentThreadId() };
-#elif defined(__linux__) || defined(__ANDROID__)
+#elif defined(__linux__) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+    // In a browser the window is the page's canvas, sized by the page.
     return ultramodern::renderer::WindowHandle{ window };
 #else
     static_assert(false && "Only Linux and Windows are set up in this file so far.");
@@ -335,8 +347,63 @@ static constexpr uint32_t audio_hard_cap_ms = 500;
 static std::atomic<uint32_t> audio_target_vis{ 2 };
 static constexpr uint32_t audio_max_target_vis = 6;
 
+#ifdef __EMSCRIPTEN__
+// A page plays through n64recomp_browser::audio (audio_output.h, an AudioWorklet) at the page's own rate, where SDL's
+// queue would play from the page's thread, which WebGPU keeps busy: the game's rate is converted by an SDL_AudioStream,
+// and what is queued is counted in the game's rate, as SDL's queue counts it.
+static uint32_t page_rate = 0;
+static SDL_AudioStream* page_stream = nullptr;
+#endif
+
+// The output queue (SDL's, or the page's), in bytes of the game's rate.
+static void audio_queue(const float* samples, size_t bytes) {
+#ifdef __EMSCRIPTEN__
+    SDL_AudioStreamPut(page_stream, samples, static_cast<int>(bytes));
+    static std::vector<float> converted;
+    int available = SDL_AudioStreamAvailable(page_stream);
+    if (available > 0) {
+        converted.resize(available / sizeof(float));
+        int got = SDL_AudioStreamGet(page_stream, converted.data(), available);
+        if (got > 0) {
+            n64recomp_browser::audio::queue(converted.data(), got / (audio_channels * sizeof(float)));
+        }
+    }
+#else
+    SDL_QueueAudio(audio_device, samples, static_cast<Uint32>(bytes));
+#endif
+}
+
+static size_t audio_queued_bytes() {
+#ifdef __EMSCRIPTEN__
+    return size_t(uint64_t(n64recomp_browser::audio::queued_frames()) * game_frequency / page_rate) *
+        audio_channels * sizeof(float);
+#else
+    return SDL_GetQueuedAudioSize(audio_device);
+#endif
+}
+
+// The page's ring can't be emptied: what is in it (two thirds of a second at most) plays out.
+static void audio_clear() {
+#ifndef __EMSCRIPTEN__
+    SDL_ClearQueuedAudio(audio_device);
+#endif
+}
+
 static bool open_audio_device(uint32_t frequency) {
     std::lock_guard<std::mutex> lock(audio_mutex);
+#ifdef __EMSCRIPTEN__
+    if (page_rate == 0) {
+        page_rate = n64recomp_browser::audio::open(audio_channels);
+    }
+    if (page_stream != nullptr) {
+        SDL_FreeAudioStream(page_stream);
+    }
+    page_stream = SDL_NewAudioStream(AUDIO_F32SYS, audio_channels, static_cast<int>(frequency), AUDIO_F32SYS,
+        audio_channels, static_cast<int>(page_rate));
+    game_frequency = frequency;
+    audio_device = page_stream != nullptr ? 1 : 0;
+    return audio_device != 0;
+#endif
 
     if (audio_device != 0) {
         SDL_CloseAudioDevice(audio_device);
@@ -383,7 +450,7 @@ extern "C" void trw_audio_waiting() {
     }
     std::lock_guard<std::mutex> lock(audio_mutex);
     const size_t bytes_per_ms = game_frequency * audio_channels * sizeof(float) / 1000;
-    if (held_tail.empty() || SDL_GetQueuedAudioSize(audio_device) > 3 * bytes_per_ms) {
+    if (held_tail.empty() || audio_queued_bytes() > 3 * bytes_per_ms) {
         return;
     }
     size_t frames = held_tail.size() / audio_channels;
@@ -393,7 +460,7 @@ extern "C" void trw_audio_waiting() {
             held_tail[i * audio_channels + c] *= gain;
         }
     }
-    SDL_QueueAudio(audio_device, held_tail.data(), static_cast<Uint32>(held_tail.size() * sizeof(float)));
+    audio_queue(held_tail.data(), held_tail.size() * sizeof(float));
     held_tail.clear();
     faded_out = true;
 }
@@ -420,7 +487,7 @@ static void queue_samples(int16_t* audio_data, size_t sample_count) {
     auto queue = [&] {
         trw::music::mix(buffer.data(), sample_count / 2, game_frequency, scale * 32768.0f);
         if (!ultramodern::is_deterministic()) {
-            SDL_QueueAudio(audio_device, buffer.data(), static_cast<Uint32>(sample_count * sizeof(float)));
+            audio_queue(buffer.data(), sample_count * sizeof(float));
             return;
         }
         // Netplay: back in after a fade out, then the last kFadeMs held back.
@@ -442,13 +509,13 @@ static void queue_samples(int16_t* audio_data, size_t sample_count) {
         held_tail.assign(joined.end() - keep, joined.end());
         size_t out = joined.size() - keep;
         if (out > 0) {
-            SDL_QueueAudio(audio_device, joined.data(), static_cast<Uint32>(out * sizeof(float)));
+            audio_queue(joined.data(), out * sizeof(float));
         }
     };
 
     std::lock_guard<std::mutex> lock(audio_mutex);
     const size_t bytes_per_ms = game_frequency * audio_channels * sizeof(float) / 1000;
-    const size_t queued_bytes = SDL_GetQueuedAudioSize(audio_device);
+    const size_t queued_bytes = audio_queued_bytes();
     // Run dry since the last chunk (not the first chunk, nor after the game
     // went quiet for a while): keep more queued from now on.
     static auto last_queue = std::chrono::steady_clock::time_point{};
@@ -471,7 +538,7 @@ static void queue_samples(int16_t* audio_data, size_t sample_count) {
     if (queued_bytes > audio_hard_cap_ms * bytes_per_ms) {
         printf("[TRW AUDIO] %zu ms queued, resyncing\n", queued_bytes / bytes_per_ms);
         fflush(stdout);
-        SDL_ClearQueuedAudio(audio_device);
+        audio_clear();
     }
     else if (queued_bytes > audio_soft_cap_ms * bytes_per_ms) {
         return;
@@ -487,7 +554,7 @@ static void queue_samples(int16_t* audio_data, size_t sample_count) {
         size_t pad = (cushion - queued_bytes) / (audio_channels * sizeof(float)) * (audio_channels * sizeof(float));
         static std::vector<float> silence;
         silence.assign(pad / sizeof(float), 0.0f);
-        SDL_QueueAudio(audio_device, silence.data(), static_cast<Uint32>(pad));
+        audio_queue(silence.data(), pad);
     }
     queue();
 }
@@ -501,7 +568,7 @@ static void queue_samples(int16_t* audio_data, size_t sample_count) {
 static size_t queued_audio_frames() {
     if (audio_device != 0) {
         std::lock_guard<std::mutex> lock(audio_mutex);
-        return SDL_GetQueuedAudioSize(audio_device) / (audio_channels * sizeof(float));
+        return audio_queued_bytes() / (audio_channels * sizeof(float));
     }
     double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - virtual_ai_start).count();
     uint64_t played = (uint64_t)(elapsed * game_frequency);
@@ -546,7 +613,7 @@ static size_t get_frames_remaining() {
         return 0;
     }
     std::lock_guard<std::mutex> lock(audio_mutex);
-    size_t queued_frames = SDL_GetQueuedAudioSize(audio_device) / (audio_channels * sizeof(float));
+    size_t queued_frames = audio_queued_bytes() / (audio_channels * sizeof(float));
     size_t headroom_frames = game_frequency / 60 * std::max(audio_headroom_vis, audio_target_vis.load());
     return queued_frames > headroom_frames ? queued_frames - headroom_frames : 0;
 }
@@ -752,10 +819,15 @@ namespace {
             option->set_padding_bottom(11.0f);
         };
         slim(options->add_start_game_or_load_rom_option());
+#ifndef __EMSCRIPTEN__
+        // A page can't send UDP or reach a player's PC by its address, nor has it a Steam to add to: neither is on it.
         slim(options->add_option("Netplay", [] { trw::online_menu::open(supported_games[0].game_id); }));
+#endif
         slim(options->add_settings_option());
         trw::presets::add_launcher_option(options);
+#ifndef __EMSCRIPTEN__
         slim(options->add_option("Add to Steam", on_add_to_steam));
+#endif
         slim(options->add_exit_option());
     }
 
@@ -766,7 +838,9 @@ namespace {
     // Leave Game: PaxDino again, on the Netplay screen, once this one has
     // closed its session. The PAXDINO_NETPLAY test variables stay behind.
     void start_again_on_netplay_screen() {
-#ifdef _WIN32
+#if defined(__EMSCRIPTEN__)
+        // No Netplay on a page.
+#elif defined(_WIN32)
         SetEnvironmentVariableW(L"PAXDINO_NETPLAY", nullptr);
         SetEnvironmentVariableW(L"PAXDINO_AUTOSTART", nullptr);
         wchar_t path[MAX_PATH * 4];
@@ -901,7 +975,9 @@ int main(int argc, char** argv) {
     }
     // Netplay too, once a session begins (src/main/netplay.cpp).
 
+#ifndef __EMSCRIPTEN__
     NFD_Init();
+#endif
 
     recompui::programconfig::set_program_name(program_name);
     recompui::programconfig::set_program_id(program_id);
@@ -945,7 +1021,9 @@ int main(int argc, char** argv) {
     recompui::config::create_controls_tab();
     recompui::config::create_sound_tab();
     trw::config::add_extra_tabs();
+#ifndef __EMSCRIPTEN__
     trw::online_menu::create_netplay_tab();
+#endif
     // Last on the strip: there are no mods for this game yet.
     recompui::config::create_mods_tab();
     trw::presets::note_first_launch();
@@ -1033,7 +1111,9 @@ int main(int argc, char** argv) {
         .message_queue_control = {}, // the runtime's defaults
     });
 
+#ifndef __EMSCRIPTEN__
     NFD_Quit();
+#endif
     trw::netplay::shutdown();
     if (trw::online_menu::leaving_to_netplay_screen()) {
         start_again_on_netplay_screen();
