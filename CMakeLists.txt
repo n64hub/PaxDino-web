@@ -403,7 +403,9 @@ target_link_libraries(PaxDino PRIVATE
 # and asks the page for files where the desktop opens a native dialog.
 if (EMSCRIPTEN)
     n64recomp_browser_frontend_page(PaxDino)
-    target_link_options(PaxDino PRIVATE "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/assets@/assets")
+    target_link_options(PaxDino PRIVATE "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/assets@/assets"
+        # The TLB views and VM regions (src/game/tlb_views.cpp) lie about 2 GB past RDRAM: the heap grows to cover them.
+        -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB)
 endif()
 
 

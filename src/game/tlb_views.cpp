@@ -47,6 +47,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#elif defined(__EMSCRIPTEN__)
+#include <unistd.h>
 #else
 #include <sys/mman.h>
 #endif
@@ -82,9 +84,40 @@ namespace {
         return (uint64_t)(int64_t)(int32_t)vaddr - 0xFFFFFFFF80000000ULL;
     }
 
+#ifdef __EMSCRIPTEN__
+    // On a page rdram is an allocation in the wasm heap (librecomp's 512 MB, not a 4 GB reservation), so these ranges,
+    // about 2 GB past it, are outside the page's memory. The heap's break is moved past all of them at once, as Paper
+    // Mario's page does for its effects' TLB pages: the views, and every region the VM server can hand out (the ROM is
+    // 8 MB, from 0x00800000). The page's memory grows to about 2.1 GB of address space, most of it never touched.
+    constexpr uint32_t reserved_begin = 0x00200000;
+    constexpr uint32_t reserved_end = 0x01100000;
+    bool reserved = false;
+
+    bool reserve(uint8_t* rdram) {
+        uintptr_t begin = (uintptr_t)(rdram + rdram_offset(reserved_begin));
+        uintptr_t end = (uintptr_t)(rdram + rdram_offset(reserved_end));
+        uintptr_t brk = (uintptr_t)sbrk(0);
+        if (end < begin || begin < brk) {
+            return false;
+        }
+        while (brk < end) {
+            uintptr_t step = std::min<uintptr_t>(end - brk, 0x40000000); // sbrk takes an int
+            // Another thread's malloc moving the break in between would own part of the range.
+            if ((uintptr_t)sbrk((intptr_t)step) != brk) {
+                return false;
+            }
+            brk += step;
+        }
+        return true;
+    }
+#endif
+
     bool make_accessible(uint8_t* rdram, uint32_t vaddr, uint32_t size) {
         uint8_t* host = rdram + rdram_offset(vaddr);
-#ifdef _WIN32
+#ifdef __EMSCRIPTEN__
+        (void)host;
+        return reserved && vaddr >= reserved_begin && vaddr < reserved_end && size <= reserved_end - vaddr;
+#elif defined(_WIN32)
         // librecomp reserves and commits the whole 4 GB as PAGE_NOACCESS.
         DWORD old_protect = 0;
         return VirtualProtect(host, size, PAGE_READWRITE, &old_protect) != 0;
@@ -114,6 +147,12 @@ namespace trw {
         set_fpu_mode(ctx);
         trw::controls::rdram = rdram;
         trw_crash_note_rdram(rdram);
+#ifdef __EMSCRIPTEN__
+        reserved = reserve(rdram);
+        if (!reserved) {
+            fprintf(stderr, "Couldn't back the TLB views and VM regions at 0x%08X-0x%08X\n", reserved_begin, reserved_end);
+        }
+#endif
         for (const TlbView& view : views) {
             if (!make_accessible(rdram, view.vaddr, view.size)) {
                 fprintf(stderr, "Couldn't set up the %s view at 0x%08X\n", view.what, view.vaddr);
