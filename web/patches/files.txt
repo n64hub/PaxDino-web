@@ -9,3 +9,4 @@ rt64 src/render/rt64_shader_library.cpp
 N64ModernRuntime ultramodern/src/audio.cpp
 N64ModernRuntime ultramodern/src/mesgqueue.cpp
 N64ModernRuntime ultramodern/src/threadqueue.cpp
+N64Recomp src/analysis.cpp own
