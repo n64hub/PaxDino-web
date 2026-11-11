@@ -9,7 +9,9 @@
 //       *0x80144E00 when that's -1): 3 the main menu, 0x1A how many players, 7 character select, 8 loadout select,
 //       0x14 level select, 0x15 the match's options, 0x19 the Rumble Pak notice; -1 none.
 //   inMatch()  a match is on and not paused, its player there (the player pointer at 0x8013EF84).
-//   matchTime()  the match's clock, the float at 0x801407F4 (counting down; 0 with no time limit).
+//   matchTime()  the match's clock, the float at 0x801407F4: 15 a second, counting down (9000 at the start of the
+//       default 10 minutes; 0 with no time limit).
+//   matchTicks()  15ths of a second since untilMatch() found the match on, counting up: the plans' clock step.
 //   state()  all of them, for the console.
 //   untilScreen(n, ms), untilMatch(ms)  resolve once screen() is n or a match is on, or after ms, with what was found.
 (() => {
@@ -34,6 +36,8 @@
   };
   const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
   window.matchTime = () => { u32[0] = n64r(0x801407F4); return f32[0]; };
+  let matchStart = null;
+  window.matchTicks = () => matchStart === null ? 0 : Math.max(0, Math.round(matchStart - matchTime()));
   window.state = () => `mode ${mode()} screen 0x${screen().toString(16)} paused ${paused()} inMatch ${inMatch()}` +
     ` matchTime ${matchTime().toFixed(1)}`;
   const until = async (test, ms) => {
@@ -42,5 +46,9 @@
     return (test() ? 'there: ' : 'not there: ') + state();
   };
   window.untilScreen = (n, ms) => until(() => mode() === 8 && screen() === n, ms);
-  window.untilMatch = (ms) => until(inMatch, ms);
+  window.untilMatch = async (ms) => {
+    const found = await until(inMatch, ms);
+    if (inMatch()) matchStart = matchTime();
+    return found;
+  };
 })();

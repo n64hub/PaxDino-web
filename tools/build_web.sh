@@ -119,8 +119,12 @@ fi
 # --- 4. The page ---
 step "Page"
 embuilder build sdl2-mt freetype-legacysjlj > /dev/null 2>&1
+# CMakeLists.txt gives RT64 web/rt64_shaders.txt only if it exists, which ninja doesn't know to configure again for.
+list="$( [[ -f web/rt64_shaders.txt ]] && echo list || echo none)"
+[[ "$(cat $prep/shader-list 2> /dev/null)" == "$list" ]] || rm -f build-web/build.ninja
 [[ -f build-web/build.ninja ]] || emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DRT64_NAGA_EXECUTABLE="$(command -v naga)" -DPython3_EXECUTABLE="$(command -v python3)" > $prep/configure.log 2>&1 ||
     { tail -30 $prep/configure.log; rm -f build-web/build.ninja; exit 1; }
+echo "$list" > $prep/shader-list
 cmake --build build-web --target PaxDino -j"$jobs"
 ls -l build-web/PaxDino.{html,js,wasm,data}
