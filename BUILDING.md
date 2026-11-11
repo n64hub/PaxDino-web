@@ -167,3 +167,27 @@ Environment variables for development; players never need them.
 | `PAXDINO_STUN=<address>:<port>` | Another STUN server. |
 | `PAXDINO_UPNP=<description URL>` | Skips the router search and uses that device (src/main/upnp.cpp). |
 | `PAXDINO_FAKE_DESYNC=<sweep>` | This PC's netplay hash reads as different from that controller read on, to see the desync messages. |
+
+## The web page
+
+The page (`build-web/PaxDino.html`, `.js`, `.wasm`, `.data`) is built on Linux with Emscripten through
+[N64Recomp-browser](https://github.com/n64hub/N64Recomp-browser) (`lib/N64Recomp-browser`, at the tag it pins), from
+the USA ROM:
+
+```bash
+git submodule update --init --recursive
+bash tools/build_web.sh "Turok - Rage Wars (USA).z64"
+```
+
+It needs emsdk active, naga (`cargo install naga-cli`), `spirv-opt` (SPIRV-Tools), clang, Ninja and Python 3, as
+N64Recomp-browser's README (Using it in a recomp) says; rush-2049-recomp's Docker image has them all, and
+N64Recomp-browser's `tools/publish_pages.sh` builds the page in it. `tools/build_web.sh`'s header says what it does:
+the game's own `lib-patches/` first, then N64Recomp-browser's web patches, but for the files both change, whose web
+change is merged by hand in `web/patches/` (`web/patches/files.txt` names them and why). Serve the folder with
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`, or with the
+`coi_serviceworker.js` beside the page, and open `PaxDino.html` in a browser with WebGPU.
+
+What differs on the page, all behind `__EMSCRIPTEN__`: no Netplay (UDP to another PC's address) and no Add to Steam on
+the launcher, the sound through N64Recomp-browser's `audio_output.h` (the game's rate converted to the page's by an
+SDL stream), no native file dialog, and either preset at resolution Auto and the display's frame rate, with no
+downsampling or MSAA.

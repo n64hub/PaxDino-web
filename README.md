@@ -1,3 +1,20 @@
+> [!WARNING]
+> **This is n64hub/PaxDino-web, a fork, not PaxDino.** Its `main` branch builds the game into a web page (WebGPU,
+> through [N64Recomp-browser](https://github.com/n64hub/N64Recomp-browser)), and everything on that branch past
+> upstream's commits was written by AI (Claude). It is not made, endorsed or supported by PaxDino's author: nothing
+> here is offered upstream, and please don't take issues with this fork to them. Building the page:
+> [BUILDING.md](BUILDING.md) (The web page).
+>
+> This port is here to build out and test N64Recomp-browser's web support on another game than the ones it was written
+> for: what it turns up is fixed there where it can be, so every recomp's page gets the fix.
+
+**Play it in the browser: https://n64hub.com/turok-rage-wars/**, with your own Turok: Rage Wars ROM (USA), picked in
+the launcher and kept in the browser. It needs WebGPU (Chrome or Edge 113 and up). The page is built from this branch
+and published with N64Recomp-browser's `tools/publish_page.sh`, so it can be a commit or two behind. It has the
+desktop build's matches, trials, bots, split-screen local multiplayer and options, but Netplay, which plays over UDP to
+another PC's address, as a page can't, and Add to Steam. Either preset draws at the browser window's size and the
+display's frame rate, with no downsampling and no MSAA, which RT64 can't do on WebGPU (it has no sample positions).
+
 # PaxDino: Rage Wars Modernized
 
 You will need the game file from a licensed copy in order to play it.
