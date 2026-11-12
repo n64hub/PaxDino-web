@@ -1047,6 +1047,14 @@ int main(int argc, char** argv) {
     ultramodern::renderer::callbacks_t renderer_callbacks{
         .create_render_context = [](uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode) -> std::unique_ptr<ultramodern::renderer::RendererContext> {
             auto presentation_mode = ultramodern::renderer::PresentationMode::PresentEarly;
+#ifdef __EMSCRIPTEN__
+            // On the page RT64 copies no frame into RDRAM: the game's CPU never reads a frame it drew, nor writes into
+            // one (watched on the desktop build through the menus and a match, a death included: every access to the
+            // framebuffers at 0x80500000 and the depth buffer after them was RT64's own), and the copy holds each
+            // display list 5-6 ms for the browser's readback. The desktop build's runtime has no such switch, and
+            // copies every frame as RT64 does by default.
+            recompui::renderer::set_render_to_ram(false);
+#endif
             return std::make_unique<TrwRendererContext>(recompui::renderer::create_render_context(rdram, window_handle, presentation_mode, developer_mode));
         },
     };
