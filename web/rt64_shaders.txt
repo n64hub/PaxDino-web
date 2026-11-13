@@ -16,7 +16,9 @@
 # a match's end. Flags follow settings (filtering, the screen filters, bloom), so a change to one of those defaults
 # means recording again. The last six of section 0 were missed in a match by tools/play_plan.json's plays (Chrome at
 # 1256x645 and 3840x2000, Firefox), put where they are built before the game starts: what the bot does in a match
-# varies from play to play, so a few rarer shaders may still be missing.
+# varies from play to play, so a few rarer shaders may still be missing. The last one, 0c1841f0 0018ac1f, a Chrome
+# play of tools/play_plan.json's match repeated for over four minutes at 3840x2000 missed (N64Recomp-browser's
+# plays.jsonl, rw at 2026-11-13 19:52 UTC).
 00504240 00002c1f fcffffff fffe793c 0800000e
 00504240 0000ac1f fc12b225 ff67dbed 04cb540b
 00504340 00000c1f fcffffff fffdf6fb 0800000b
@@ -49,6 +51,7 @@ c8104b50 00182c1f fcff97ff fffdfe38 0ccb540a
 0c1841f0 0018ac1f fc1216ac f0fffe38 088a000e
 0c1841f0 0018ac1f fc1217ff ff17fe3f 0aaaaa0e
 0c184dd8 0018ec1f fc309604 5ffefff8 0ccb540e
+0c1841f0 0018ac1f fcff97ff ff14fe3f 088a000e
 section grim-retreat
 00504240 00102c1f fc12b225 ff67dbed 084e142b
 0c192438 0018ac1f fc1217ff fffffe38 088a000e
