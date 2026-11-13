@@ -1,0 +1,156 @@
+--- a/recompui/include/recompui/renderer.h
++++ b/recompui/include/recompui/renderer.h
+@@ -32,6 +32,10 @@ namespace recompui {
+             // The last frame presented again, with what's drawn over it (the
+             // game waiting and sending no frames of its own).
+             void update_screen_held();
++#ifdef __EMSCRIPTEN__
++            // RT64 builds what the game's boot draws with before the game starts (RT64::Application::prepareForGame()).
++            void prepare_for_game() override;
++#endif
+             void shutdown() override;
+             uint32_t get_display_framerate() const override;
+             float get_resolution_scale() const override;
+@@ -48,6 +52,15 @@ namespace recompui {
+ 
+         std::unique_ptr<ultramodern::renderer::RendererContext> create_render_context(uint8_t *rdram, ultramodern::renderer::WindowHandle window_handle, ultramodern::renderer::PresentationMode presentation_mode, bool developer_mode);
+ 
++        // Whether RT64 copies each frame it draws back into RDRAM (its render to RAM, on unless turned off), which a game
++        // that reads its own frames on the CPU needs. A render context reads it when it is made. It costs a second draw
++        // of the frame at the N64's resolution, and in a browser a wait of 5-6 ms per display list for the copy.
++        void set_render_to_ram(bool enabled);
++
++        // Whether that copy reaches RDRAM a display list late (RT64's renderToRAMLate, off unless turned on), so a list
++        // doesn't wait for it. A game whose CPU reads a frame it has just drawn reads the one before then.
++        void set_render_to_ram_late(bool late);
++
+         RT64::UserConfiguration::Antialiasing RT64MaxMSAA();
+         bool RT64SamplePositionsSupported();
+         bool RT64HighPrecisionFBEnabled();
+--- a/recompui/src/renderer/rt64_render_context.cpp
++++ b/recompui/src/renderer/rt64_render_context.cpp
+@@ -20,6 +20,8 @@ using namespace recompui;
+ static RT64::UserConfiguration::Antialiasing device_max_msaa = RT64::UserConfiguration::Antialiasing::None;
+ static bool sample_positions_supported = false;
+ static bool high_precision_fb_enabled = false;
++static bool render_to_ram = true;
++static bool render_to_ram_late = false;
+ 
+ static uint8_t DMEM[0x1000];
+ static uint8_t IMEM[0x1000];
+@@ -60,6 +62,20 @@ unsigned int DPC_TMEM_REG = 0;
+ 
+ void dummy_check_interrupts() {}
+ 
++#if defined(__EMSCRIPTEN__)
++// With render to RAM's late copy, RT64 tells the game the RDP is done before it records and submits a list's workload,
++// so the game goes on meanwhile (ultramodern::renderer::rdp_done), once a game's task: never for a list RT64 draws by
++// itself (a pipeline warm-up, a dummy workload).
++static bool sending_game_dl = false;
++
++static void rdp_done() {
++    if (sending_game_dl) {
++        sending_game_dl = false;
++        ultramodern::renderer::rdp_done();
++    }
++}
++#endif
++
+ RT64::UserConfiguration::Antialiasing compute_max_supported_aa(plume::RenderSampleCounts bits) {
+     if (bits & plume::RenderSampleCount::Bits::COUNT_2) {
+         if (bits & plume::RenderSampleCount::Bits::COUNT_4) {
+@@ -227,12 +243,18 @@ renderer::RT64Context::RT64Context(uint8_t* rdram, ultramodern::renderer::Window
+     appCore.window = window_handle.window;
+ #elif defined(__linux__) || defined(__ANDROID__)
+     appCore.window = window_handle;
++#elif defined(__EMSCRIPTEN__)
++    // RT64 draws on the page's canvas, the one SDL's window is.
++    appCore.window = "#canvas";
+ #elif defined(__APPLE__)
+     appCore.window.window = window_handle.window;
+     appCore.window.view = window_handle.view;
+ #endif
+ 
+     appCore.checkInterrupts = dummy_check_interrupts;
++#if defined(__EMSCRIPTEN__)
++    appCore.rdpDone = rdp_done;
++#endif
+ 
+     appCore.HEADER = dummy_rom_header;
+     appCore.RDRAM = rdram;
+@@ -272,6 +294,8 @@ renderer::RT64Context::RT64Context(uint8_t* rdram, ultramodern::renderer::Window
+ 
+     // Create the RT64 application.
+     app = std::make_unique<RT64::Application>(appCore, appConfig);
++    app->emulatorConfig.framebuffer.renderToRAM = render_to_ram;
++    app->emulatorConfig.framebuffer.renderToRAMLate = render_to_ram_late;
+ 
+     // Set initial user config settings based on the current settings.
+     auto& cur_config = ultramodern::renderer::get_graphics_config();
+@@ -313,6 +337,10 @@ renderer::RT64Context::RT64Context(uint8_t* rdram, ultramodern::renderer::Window
+         return;
+     }
+ 
++    // RT64 marks where it reads each display list's commands from, so a load from ROM can wait for a list it would land
++    // on (ultramodern's displaylists.cpp; nullptr, so none, without ULTRAMODERN_LOADS_WAIT_FOR_DISPLAY_LISTS).
++    app->state->displayListReads = ultramodern::displaylist_reads();
++
+     // Set the application's fullscreen state.
+     app->setFullScreen(cur_config.wm_option == ultramodern::renderer::WindowMode::Fullscreen);
+ 
+@@ -341,7 +369,14 @@ void renderer::RT64Context::send_dl(const OSTask* task) {
+     check_texture_pack_actions();
+     app->state->rsp->reset();
+     app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
++#if defined(__EMSCRIPTEN__)
++    sending_game_dl = true;
++#endif
+     app->processDisplayLists(app->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
++#if defined(__EMSCRIPTEN__)
++    sending_game_dl = false;
++#endif
++    ultramodern::displaylist_read();
+ }
+ 
+ void renderer::RT64Context::send_dummy_workload(uint32_t fb_address) {
+@@ -351,6 +386,12 @@ void renderer::RT64Context::send_dummy_workload(uint32_t fb_address) {
+     // G_AC_NONE | G_ZS_PIXEL | G_RM_NOOP | G_RM_NOOP2
+     app->state->rdp->setOtherMode(0x382C30, 0);
+     app->state->rdp->fillRect(0, 0, 320 << 2, 240 << 2);
++#ifdef __EMSCRIPTEN__
++    // Not copied to RDRAM: the dummy framebuffer is game memory once the game starts, and on a page these lists can
++    // fall seconds behind the VIs that queue them (each copy waits for the GPU), so the copies would land on what the
++    // game has loaded there (Donkey Kong 64 keeps its code and audio microcode at 0x80700000).
++    app->state->setRenderToRAM(0);
++#endif
+     app->state->fullSync();
+     app->state->listProcessEnd();
+ }
+@@ -368,6 +409,12 @@ void renderer::RT64Context::update_screen_held() {
+     app->state->debuggerInspector.paused = false;
+ }
+ 
++#ifdef __EMSCRIPTEN__
++void renderer::RT64Context::prepare_for_game() {
++    app->prepareForGame();
++}
++#endif
++
+ void renderer::RT64Context::shutdown() {
+     if (app != nullptr) {
+         app->end();
+@@ -506,6 +553,14 @@ std::unique_ptr<ultramodern::renderer::RendererContext> renderer::create_render_
+     return std::make_unique<renderer::RT64Context>(rdram, window_handle, presentation_mode, developer_mode);
+ }
+ 
++void renderer::set_render_to_ram(bool enabled) {
++    render_to_ram = enabled;
++}
++
++void renderer::set_render_to_ram_late(bool late) {
++    render_to_ram_late = late;
++}
++
+ bool renderer::RT64SamplePositionsSupported() {
+     return sample_positions_supported;
+ }

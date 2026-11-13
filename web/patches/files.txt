@@ -21,7 +21,9 @@
 # queue.
 # N64Recomp: analysis.cpp is the game's, whose 0001 finds a jump table in another section, as the web's change to it
 # (its only one) does for GoldenEye.
-# merged from N64Recomp-browser 15bfbca51a924c29eb6949088a381395a6d3e8d0
+# RecompFrontend: renderer.h and rt64_render_context.cpp have the game's update_screen_held() (its 0016) and after it
+# the web's prepare_for_game(), with which the page's RT64 builds what the game's boot draws with before the game starts.
+# merged from N64Recomp-browser 394a5748c0d91b25c5d9bc3adfee583015e3b965
 rt64 src/common/rt64_math.cpp
 rt64 src/gbi/rt64_gbi.cpp
 rt64 src/hle/rt64_state.h
@@ -33,3 +35,5 @@ N64ModernRuntime ultramodern/src/audio.cpp
 N64ModernRuntime ultramodern/src/mesgqueue.cpp
 N64ModernRuntime ultramodern/src/threadqueue.cpp
 N64Recomp src/analysis.cpp own
+RecompFrontend recompui/include/recompui/renderer.h
+RecompFrontend recompui/src/renderer/rt64_render_context.cpp
