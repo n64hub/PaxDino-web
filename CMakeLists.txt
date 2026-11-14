@@ -106,6 +106,20 @@ set(BUILD_SHARED_LIBS OFF)
 
 add_subdirectory(${TRW_LIB_DIR}/N64ModernRuntime ${CMAKE_BINARY_DIR}/N64ModernRuntime)
 
+# The page's runtime answers no yield of a graphics task still queued for RT64 with the task's RSP done, which
+# N64Recomp-browser's web runtime turns on with Emscripten (ULTRAMODERN_YIELDS_END_QUEUED_GRAPHICS): the game reuses a
+# display list's buffer once the RSP is done, so lib-patches/N64ModernRuntime/0002 sends that done only after RT64 has
+# read the whole list. An early one let the game write over a list RT64 had yet to read, and a match stopped drawing for
+# good about 10 s in, its sound running dry. Ignored, as upstream ignores a yield, a match plays on.
+if (EMSCRIPTEN)
+    get_target_property(trw_ultramodern_definitions ultramodern COMPILE_DEFINITIONS)
+    if (NOT "ULTRAMODERN_YIELDS_END_QUEUED_GRAPHICS=1" IN_LIST trw_ultramodern_definitions)
+        message(FATAL_ERROR "lib/N64Recomp-browser's runtime no longer defines ULTRAMODERN_YIELDS_END_QUEUED_GRAPHICS=1: see why CMakeLists.txt takes it out")
+    endif()
+    list(REMOVE_ITEM trw_ultramodern_definitions "ULTRAMODERN_YIELDS_END_QUEUED_GRAPHICS=1")
+    set_property(TARGET ultramodern PROPERTY COMPILE_DEFINITIONS ${trw_ultramodern_definitions})
+endif()
+
 # The page: N64Recomp-browser's frontend/ (the page shell, the file picker, sound, the cross-origin service worker).
 if (EMSCRIPTEN)
     add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64Recomp-browser/frontend ${CMAKE_BINARY_DIR}/web_frontend)
