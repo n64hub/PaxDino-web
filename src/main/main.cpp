@@ -297,6 +297,10 @@ public:
             inner->update_screen();
         }
     }
+#ifdef __EMSCRIPTEN__
+    // The page's RT64 builds what the boot draws with before the game starts (N64Recomp-browser's web runtime).
+    void prepare_for_game() override { inner->prepare_for_game(); }
+#endif
     void shutdown() override { inner->shutdown(); }
     uint32_t get_display_framerate() const override { return inner->get_display_framerate(); }
     float get_resolution_scale() const override { return inner->get_resolution_scale(); }
